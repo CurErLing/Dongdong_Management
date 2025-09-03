@@ -11,6 +11,8 @@ import {
   Eye,
   EyeOff
 } from 'lucide-react';
+import { LocalStorageManager } from './LocalStorageManager';
+import type { RoleResourcesStore } from '../../types';
 
 export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'general' | 'data' | 'security' | 'notifications' | 'about'>('general');
@@ -305,6 +307,38 @@ export const Settings: React.FC = () => {
                           />
                         </label>
                       </div>
+                    </div>
+
+                    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                      <h3 className="text-md font-medium text-gray-900 dark:text-gray-100 mb-3">数据清理</h3>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          onClick={() => clearData('logs')}
+                          className="flex items-center px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
+                        >
+                          <Trash2 size={16} className="mr-2" />
+                          清理日志
+                        </button>
+                        <button
+                          onClick={() => clearData('all')}
+                          className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                        >
+                          <Trash2 size={16} className="mr-2" />
+                          清理所有数据
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 本地文件系统管理 */}
+                    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                      <h3 className="text-md font-medium text-gray-900 dark:text-gray-100 mb-3">本地文件系统管理</h3>
+                      <LocalStorageManager 
+                        roleResources={JSON.parse(localStorage.getItem('admin_role_resources_v1') || '{}')}
+                        onImportSuccess={(resources: RoleResourcesStore) => {
+                          localStorage.setItem('admin_role_resources_v1', JSON.stringify(resources));
+                          alert('资源数据已更新！');
+                        }}
+                      />
                     </div>
 
                     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">

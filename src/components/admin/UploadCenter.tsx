@@ -1,12 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Trash2 } from 'lucide-react';
 import { logResourceAction } from '../../utils/logger';
+import { fileToBase64, preprocessFile, revokePreviewUrls } from '../../utils/fileStorage';
+import { storeRoleResourcesHybrid } from '../../utils/hybridStorage';
+import { dbManager, checkIndexedDBStatus } from '../../utils/indexedDBStorage';
+import { storeFileChunked, getFileChunked, initChunkedStorage, debugChunkedStorage, getStorageStatsChunked } from '../../utils/chunkedStorage';
+import { initSimpleStorage, getFileSimple, getSimpleStorageStats } from '../../utils/simpleStorage';
+import type { Role, ResourceItem, RoleResourcesStore } from '../../types';
 
 // 直接复用 RoleManager 的本地存储结构与键值
 const storageKey = 'admin_roles_v1';
 const roleResKey = 'admin_role_resources_v1';
-
-import type { Role, ResourceItem, RoleResourcesStore } from '../../types';
 
 const selectedRoleKey = 'upload_center_selected_role';
 const selectedTabKey = 'upload_center_selected_tab';
@@ -29,6 +33,40 @@ export const UploadCenter: React.FC = () => {
     console.log('文件上传：从localStorage读取资源数据', data);
     return data;
   });
+
+  // 从混合存储获取角色资源
+  const fetchRoleResources = async (roleId: string) => {
+    try {
+      // 检查IndexedDB状态
+      const status = await checkIndexedDBStatus();
+      console.log('IndexedDB状态:', status);
+      
+      if (!status.isInitialized) {
+        console.error('IndexedDB未正确初始化:', status.error);
+        return;
+      }
+
+      // 强制使用IndexedDB获取数据
+      const result = await dbManager.get('roleResources', roleId);
+      console.log('获取到的角色资源:', result);
+      const resources = (result as any)?.resources;
+      if (resources) {
+        setRoleResources(prev => ({
+          ...prev,
+          [roleId]: resources
+        }));
+      }
+    } catch (error) {
+      console.error('从IndexedDB获取角色资源失败:', error);
+    }
+  };
+
+  // 当选择角色变化时，从混合存储获取数据
+  useEffect(() => {
+    if (selectedRoleId) {
+      fetchRoleResources(selectedRoleId);
+    }
+  }, [selectedRoleId]);
 
   const persistRes = (next: RoleResourcesStore) => {
     setRoleResources(next);
@@ -116,75 +154,249 @@ export const UploadCenter: React.FC = () => {
     setTravelVideo3(null);
   }, [selectedRoleId, activeTab]);
 
-  const onSave = () => {
-    if (!selectedRoleId || !form.name.trim()) return;
-    console.log('保存资源到角色:', selectedRoleId, '页签:', activeTab, '资源名称:', form.name.trim());
-    const nextErrors: typeof errors = {};
-    if (!form.name.trim()) nextErrors.name = '请输入名称';
-    if (activeTab === 'standby' && !videoFile) nextErrors.video = '待机资源需上传视频';
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-    const roleRes = ensureRoleRes(selectedRoleId);
-    console.log('当前角色资源:', roleRes);
-    const item: ResourceItem = { id: `${Date.now()}`, name: form.name.trim() };
-
-    if (['eat', 'gift', 'travel', 'moments'].includes(activeTab)) {
-      item.dialogue = form.dialogue?.trim();
-      item.timeDetail = form.timeDetail || undefined;
-      if (videoFile) item.videoUrl = URL.createObjectURL(videoFile);
-      if (coverFile) item.coverUrl = URL.createObjectURL(coverFile);
-      if (iconFile && (activeTab === 'eat' || activeTab === 'gift')) item.iconUrl = URL.createObjectURL(iconFile);
-      
-      // 旅行资源的三个视频
-      if (activeTab === 'travel') {
-        if (travelVideo1) item.travelVideo1 = URL.createObjectURL(travelVideo1);
-        if (travelVideo2) item.travelVideo2 = URL.createObjectURL(travelVideo2);
-        if (travelVideo3) item.travelVideo3 = URL.createObjectURL(travelVideo3);
+  // 初始化存储系统
+  useEffect(() => {
+    const initStorage = async () => {
+      try {
+        console.log('UploadCenter: 开始初始化存储系统...');
+        
+        // 初始化简化存储（优先使用）
+        await initSimpleStorage();
+        console.log('UploadCenter: 简化存储初始化完成');
+        
+        // 检查简化存储状态
+        const simpleStats = await getSimpleStorageStats();
+        console.log('UploadCenter: 简化存储统计:', simpleStats);
+        
+        // 初始化分片存储（备用）
+        try {
+          await initChunkedStorage();
+          console.log('UploadCenter: 分片存储初始化完成');
+          
+          const stats = await getStorageStatsChunked();
+          console.log('UploadCenter: 分片存储统计:', stats);
+        } catch (error) {
+          console.warn('UploadCenter: 分片存储初始化失败，将使用简化存储:', error);
+        }
+        
+        // 检查IndexedDB状态
+        const status = await checkIndexedDBStatus();
+        console.log('UploadCenter: IndexedDB状态:', status);
+        
+      } catch (error) {
+        console.error('UploadCenter: 存储系统初始化失败:', error);
       }
-    }
-    if (activeTab === 'standby') {
-      item.standbyType = standbyType;
-      if (videoFile) item.videoUrl = URL.createObjectURL(videoFile);
-    }
+    };
+    
+    initStorage();
+  }, []);
 
-    const next: RoleResourcesStore = {
-      ...roleResources,
-      [selectedRoleId]: {
+  const onSave = async () => {
+    if (!selectedRoleId || !form.name.trim()) return;
+    
+    const roleRes = ensureRoleRes(selectedRoleId);
+    const item: ResourceItem = {
+      id: `resource-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: form.name.trim()
+    };
+
+    try {
+      // 预处理文件
+      let processedVideoFile = null;
+      let processedIconFile = null;
+      let processedCoverFile = null;
+      let processedTravelVideo1 = null;
+      let processedTravelVideo2 = null;
+      let processedTravelVideo3 = null;
+
+      if (['eat', 'gift', 'travel', 'moments'].includes(activeTab)) {
+        item.dialogue = form.dialogue?.trim();
+        item.timeDetail = form.timeDetail || undefined;
+        
+        // 处理视频文件
+        if (videoFile) {
+          processedVideoFile = await preprocessFile(videoFile, 'video');
+          // 使用分片存储
+          const videoId = await storeFileChunked(processedVideoFile, {
+            fileType: 'video',
+            mimeType: processedVideoFile.type,
+            roleId: selectedRoleId,
+            resourceType: activeTab,
+            resourceId: item.id,
+            metadata: { resourceId: item.id }
+          });
+          item.videoUrl = videoId;
+          console.log('UploadCenter: 视频文件存储成功，ID:', videoId, '文件名:', videoFile.name);
+        }
+        
+        // 处理封面文件
+        if (coverFile) {
+          processedCoverFile = await preprocessFile(coverFile, 'image');
+          // 使用分片存储
+          const coverId = await storeFileChunked(processedCoverFile, {
+            fileType: 'image',
+            mimeType: processedCoverFile.type,
+            roleId: selectedRoleId,
+            resourceType: activeTab,
+            resourceId: item.id,
+            metadata: { resourceId: item.id }
+          });
+          item.coverUrl = coverId;
+          console.log('UploadCenter: 封面文件存储成功，ID:', coverId, '文件名:', coverFile.name);
+        }
+        
+        // 处理图标文件
+        if (iconFile && (activeTab === 'eat' || activeTab === 'gift')) {
+          processedIconFile = await preprocessFile(iconFile, 'image');
+          // 使用分片存储
+          const iconId = await storeFileChunked(processedIconFile, {
+            fileType: 'image',
+            mimeType: processedIconFile.type,
+            roleId: selectedRoleId,
+            resourceType: activeTab,
+            resourceId: item.id,
+            metadata: { resourceId: item.id }
+          });
+          item.iconUrl = iconId;
+          console.log('UploadCenter: 图标文件存储成功，ID:', iconId, '文件名:', iconFile.name);
+        }
+        
+        // 处理旅行资源的三个视频
+        if (activeTab === 'travel') {
+          if (travelVideo1) {
+            processedTravelVideo1 = await preprocessFile(travelVideo1, 'video');
+            // 使用分片存储
+            const video1Id = await storeFileChunked(processedTravelVideo1, {
+              fileType: 'video',
+              mimeType: processedTravelVideo1.type,
+              roleId: selectedRoleId,
+              resourceType: activeTab,
+              resourceId: item.id,
+              metadata: { resourceId: item.id, videoIndex: 1 }
+            });
+            item.travelVideo1 = video1Id;
+            console.log('UploadCenter: 旅行视频1存储成功，ID:', video1Id);
+          }
+          if (travelVideo2) {
+            processedTravelVideo2 = await preprocessFile(travelVideo2, 'video');
+            // 使用分片存储
+            const video2Id = await storeFileChunked(processedTravelVideo2, {
+              fileType: 'video',
+              mimeType: processedTravelVideo2.type,
+              roleId: selectedRoleId,
+              resourceType: activeTab,
+              resourceId: item.id,
+              metadata: { resourceId: item.id, videoIndex: 2 }
+            });
+            item.travelVideo2 = video2Id;
+            console.log('UploadCenter: 旅行视频2存储成功，ID:', video2Id);
+          }
+          if (travelVideo3) {
+            processedTravelVideo3 = await preprocessFile(travelVideo3, 'video');
+            // 使用分片存储
+            const video3Id = await storeFileChunked(processedTravelVideo3, {
+              fileType: 'video',
+              mimeType: processedTravelVideo3.type,
+              roleId: selectedRoleId,
+              resourceType: activeTab,
+              resourceId: item.id,
+              metadata: { resourceId: item.id, videoIndex: 3 }
+            });
+            item.travelVideo3 = video3Id;
+            console.log('UploadCenter: 旅行视频3存储成功，ID:', video3Id);
+          }
+        }
+      }
+      
+      if (activeTab === 'standby') {
+        item.standbyType = standbyType;
+        if (videoFile) {
+          processedVideoFile = await preprocessFile(videoFile, 'video');
+          // 强制使用IndexedDB存储
+          const videoId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const videoRecord = {
+            id: videoId,
+            type: 'video',
+            roleId: selectedRoleId,
+            resourceType: activeTab,
+            fileName: videoFile.name,
+            fileSize: videoFile.size,
+            data: await fileToBase64(processedVideoFile),
+            metadata: { resourceId: item.id },
+            timestamp: Date.now()
+          };
+          await dbManager.set('files', videoRecord);
+          item.videoUrl = videoId;
+        }
+      }
+
+      // 使用混合存储保存角色资源
+      const nextResources = {
         ...roleRes,
         [activeTab]: (roleRes as any)[activeTab].concat(item)
-      }
-    } as RoleResourcesStore;
-    console.log('保存后的资源数据:', next);
-    persistRes(next);
-    
-    const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
-    const resourceTypeMap = { eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any;
-    const resourceType = resourceTypeMap[activeTab];
-    
-    logResourceAction('新增资源', roleName, resourceType, item.name, undefined, {
-      roleId: selectedRoleId,
-      resourceId: item.id,
-      hasVideo: !!item.videoUrl,
-      hasIcon: !!item.iconUrl,
-      hasCover: !!item.coverUrl,
-      hasDialogue: !!item.dialogue,
-      timeDetail: item.timeDetail,
-      standbyType: item.standbyType,
-      // 旅行视频信息
-      hasTravelVideo1: !!item.travelVideo1,
-      hasTravelVideo2: !!item.travelVideo2,
-      hasTravelVideo3: !!item.travelVideo3
-    });
+      };
+      
+      console.log('UploadCenter: 准备保存资源，文件ID信息:', {
+        videoUrl: item.videoUrl,
+        coverUrl: item.coverUrl,
+        iconUrl: item.iconUrl,
+        travelVideo1: item.travelVideo1,
+        travelVideo2: item.travelVideo2,
+        travelVideo3: item.travelVideo3
+      });
+      
+      // 使用IndexedDB保存角色资源
+      const roleResourceRecord = {
+        roleId: selectedRoleId,
+        resources: nextResources,
+        timestamp: Date.now(),
+        version: '1.0'
+      };
+      
+      await dbManager.set('roleResources', roleResourceRecord);
+      
+      console.log('UploadCenter: 资源保存成功，完整数据:', nextResources);
+      console.log('UploadCenter: 保存的资源项:', item);
+      
+      const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
+      const resourceTypeMap = { eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any;
+      const resourceType = resourceTypeMap[activeTab];
+      
+      logResourceAction('新增资源', roleName, resourceType, item.name, undefined, {
+        roleId: selectedRoleId,
+        resourceId: item.id,
+        hasVideo: !!item.videoUrl,
+        hasIcon: !!item.iconUrl,
+        hasCover: !!item.coverUrl,
+        hasDialogue: !!item.dialogue,
+        timeDetail: item.timeDetail,
+        standbyType: item.standbyType,
+        // 旅行视频信息
+        hasTravelVideo1: !!item.travelVideo1,
+        hasTravelVideo2: !!item.travelVideo2,
+        hasTravelVideo3: !!item.travelVideo3
+      });
 
-    // reset
-    setForm({ name: '', dialogue: '', timeDetail: '' });
-    setVideoFile(null);
-    setIconFile(null);
-    setCoverFile(null);
-    setStandbyType('long');
-    setTravelVideo1(null);
-    setTravelVideo2(null);
-    setTravelVideo3(null);
+      // 清理临时预览URL
+      const tempUrls = [videoFile, iconFile, coverFile, travelVideo1, travelVideo2, travelVideo3]
+        .filter(Boolean)
+        .map(file => URL.createObjectURL(file!));
+      revokePreviewUrls(tempUrls);
+
+      // reset
+      setForm({ name: '', dialogue: '', timeDetail: '' });
+      setVideoFile(null);
+      setIconFile(null);
+      setCoverFile(null);
+      setStandbyType('long');
+      setTravelVideo1(null);
+      setTravelVideo2(null);
+      setTravelVideo3(null);
+      
+    } catch (error) {
+      console.error('保存资源失败:', error);
+      alert(`保存失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
   };
 
   const currentList: ResourceItem[] = useMemo(() => {
@@ -210,30 +422,232 @@ export const UploadCenter: React.FC = () => {
   const toggleItem = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
   // 删除资源
-  const deleteResource = (resourceId: string) => {
+  const deleteResource = async (resourceId: string) => {
     if (!selectedRoleId || !confirm('确定删除该资源吗？')) return;
-    const roleRes = ensureRoleRes(selectedRoleId);
-    const arr: ResourceItem[] = (roleRes as any)[activeTab] || [];
-    const nextArr = arr.filter(item => item.id !== resourceId);
-    const next: RoleResourcesStore = { ...roleResources, [selectedRoleId]: { ...roleRes, [activeTab]: nextArr } } as RoleResourcesStore;
-    persistRes(next);
     
-    const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
-    const resourceTypeMap = { eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any;
-    const resourceType = resourceTypeMap[activeTab];
-    const deletedResource = arr.find(item => item.id === resourceId);
-    
-    logResourceAction('删除资源', roleName, resourceType, deletedResource?.name || '', undefined, {
-      roleId: selectedRoleId,
-      resourceId,
-      deletedResource: deletedResource
-    });
+    try {
+      const roleRes = ensureRoleRes(selectedRoleId);
+      const arr: ResourceItem[] = (roleRes as any)[activeTab] || [];
+      const nextArr = arr.filter(item => item.id !== resourceId);
+      
+      // 使用混合存储保存更新后的资源
+      const nextResources = {
+        ...roleRes,
+        [activeTab]: nextArr
+      };
+      
+      await storeRoleResourcesHybrid(selectedRoleId, nextResources);
+      
+      // 更新本地状态
+      setRoleResources(prev => ({
+        ...prev,
+        [selectedRoleId]: nextResources
+      }));
+      
+      const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
+      const resourceTypeMap = { eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any;
+      const resourceType = resourceTypeMap[activeTab];
+      const deletedResource = arr.find(item => item.id !== resourceId);
+      
+      logResourceAction('删除资源', roleName, resourceType, deletedResource?.name || '', undefined, {
+        roleId: selectedRoleId,
+        resourceId,
+        deletedResource: deletedResource
+      });
+    } catch (error) {
+      console.error('删除资源失败:', error);
+      alert(`删除失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  };
+
+  // 获取文件内容用于显示
+  const getFileContent = async (fileId: string): Promise<string | null> => {
+    try {
+      console.log('UploadCenter: 正在获取文件内容:', fileId);
+      
+      if (!fileId || fileId === '') {
+        console.log('UploadCenter: 文件ID为空');
+        return null;
+      }
+      
+      // 优先尝试从简化存储获取
+      console.log('UploadCenter: 尝试从简化存储获取文件...');
+      const simpleResult = await getFileSimple(fileId);
+      if (simpleResult) {
+        console.log('UploadCenter: 从简化存储获取文件成功:', simpleResult.fileName);
+        console.log('UploadCenter: 文件大小:', simpleResult.data.length);
+        console.log('UploadCenter: 文件类型:', simpleResult.mimeType);
+        return simpleResult.data;
+      }
+      
+      // 检查简化存储状态
+      try {
+        const simpleStats = await getSimpleStorageStats();
+        console.log('UploadCenter: 简化存储当前状态:', simpleStats);
+      } catch (error) {
+        console.error('UploadCenter: 获取简化存储状态失败:', error);
+      }
+      
+      // 尝试从分片存储获取
+      console.log('UploadCenter: 尝试从分片存储获取文件...');
+      const chunkedResult = await getFileChunked(fileId);
+      if (chunkedResult) {
+        console.log('UploadCenter: 从分片存储获取文件成功:', chunkedResult.metadata.fileName);
+        console.log('UploadCenter: 文件大小:', chunkedResult.data.length);
+        console.log('UploadCenter: 文件类型:', chunkedResult.metadata.mimeType);
+        return chunkedResult.data;
+      }
+      
+      console.log('UploadCenter: 分片存储中没有找到文件，尝试从IndexedDB获取...');
+      
+      // 如果分片存储没有，尝试从IndexedDB获取
+      const status = await checkIndexedDBStatus();
+      console.log('UploadCenter IndexedDB状态:', status);
+      
+      if (!status.isInitialized) {
+        console.error('UploadCenter IndexedDB未正确初始化:', status.error);
+        return null;
+      }
+      
+      // 强制使用IndexedDB获取文件
+      const fileRecord = await dbManager.get('files', fileId);
+      console.log('UploadCenter: 获取到的文件记录:', fileRecord);
+      
+      if (!fileRecord) {
+        console.log('UploadCenter: 文件记录不存在:', fileId);
+        return null;
+      }
+      
+      if (!(fileRecord as any).data) {
+        console.log('UploadCenter: 文件记录中没有数据字段:', fileRecord);
+        return null;
+      }
+      
+      const data = (fileRecord as any).data;
+      console.log('UploadCenter: 文件数据长度:', typeof data === 'string' ? data.length : '非字符串');
+      console.log('UploadCenter: 文件数据类型:', typeof data);
+      
+      if (typeof data !== 'string') {
+        console.error('UploadCenter: 文件数据不是字符串类型:', typeof data);
+        return null;
+      }
+      
+      if (!data.startsWith('data:')) {
+        console.error('UploadCenter: 文件数据不是有效的Base64格式');
+        return null;
+      }
+      
+      console.log('UploadCenter: 从IndexedDB获取文件成功');
+      return data;
+    } catch (error) {
+      console.error('UploadCenter: 获取文件内容失败:', error);
+      return null;
+    }
+  };
+
+  // 文件显示组件
+  const FileDisplay: React.FC<{ fileId: string; type: 'image' | 'video'; alt?: string; className?: string }> = ({ 
+    fileId, 
+    type, 
+    alt = '文件', 
+    className 
+  }) => {
+    const [fileUrl, setFileUrl] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+      const loadFile = async () => {
+        setIsLoading(true);
+        setError(null);
+        
+        try {
+          console.log(`UploadCenter FileDisplay: 开始加载文件 ${fileId}`);
+          const content = await getFileContent(fileId);
+          
+          if (content) {
+            console.log(`UploadCenter FileDisplay: 文件 ${fileId} 加载成功，内容长度: ${content.length}`);
+            setFileUrl(content);
+          } else {
+            console.error(`UploadCenter FileDisplay: 文件 ${fileId} 加载失败 - 内容为空`);
+            setError('文件内容为空，可能原因：1. 文件未正确保存 2. 分片存储未初始化 3. 文件ID无效');
+          }
+        } catch (error) {
+          console.error(`UploadCenter FileDisplay: 文件 ${fileId} 加载失败:`, error);
+          setError(`加载失败: ${error instanceof Error ? error.message : '未知错误'}`);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      if (fileId) {
+        loadFile();
+      } else {
+        setIsLoading(false);
+        setError('文件ID无效');
+      }
+    }, [fileId]);
+
+    if (isLoading) {
+      return (
+        <div className={`${className} bg-gray-200 dark:bg-gray-700 animate-pulse rounded flex items-center justify-center`}>
+          <span className="text-xs text-gray-500">加载中...</span>
+        </div>
+      );
+    }
+
+    if (error || !fileUrl) {
+      return (
+        <div className={`${className} bg-red-100 dark:bg-red-900/20 text-red-600 text-center flex flex-col items-center justify-center p-2`}>
+          <span className="text-xs font-medium">文件加载失败</span>
+          <span className="text-xs mt-1 text-red-500">{error || '未知错误'}</span>
+          <button 
+            onClick={() => window.location.reload()} 
+            className="text-xs mt-2 px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+          >
+            刷新页面
+          </button>
+        </div>
+      );
+    }
+
+    if (type === 'image') {
+      return (
+        <img 
+          src={fileUrl} 
+          alt={alt} 
+          className={className}
+          onError={() => {
+            console.error(`UploadCenter FileDisplay: 图片 ${fileId} 渲染失败`);
+            setError('图片渲染失败，可能原因：1. 文件格式不支持 2. 文件损坏 3. 浏览器兼容性问题');
+          }}
+        />
+      );
+    } else {
+      return (
+        <video 
+          src={fileUrl} 
+          controls 
+          className={className}
+          onError={() => {
+            console.error(`UploadCenter FileDisplay: 视频 ${fileId} 渲染失败`);
+            setError('视频渲染失败，可能原因：1. 文件格式不支持 2. 文件损坏 3. 浏览器兼容性问题');
+          }}
+        />
+      );
+    }
   };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">文件上传中心</h2>
+        <button
+          onClick={() => debugChunkedStorage()}
+          className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+        >
+          调试存储
+        </button>
       </div>
 
       {/* 角色选择 */}
@@ -439,19 +853,29 @@ export const UploadCenter: React.FC = () => {
 
                 {isOpen && (item.iconUrl || item.coverUrl || item.videoUrl || item.travelVideo1 || item.travelVideo2 || item.travelVideo3) && (
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-start">
-                    {/* 图标 (非旅行资源) */}
+                    {/* 图标 (非旅行资源) - 调整为小图标尺寸 */}
                     {activeTab !== 'travel' && item.iconUrl && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">图标</p>
-                        <img src={item.iconUrl} alt="icon" className="w-[30%] h-60 object-cover rounded border border-gray-200 dark:border-gray-700" />
+                        <FileDisplay
+                          fileId={item.iconUrl}
+                          type="image"
+                          alt="icon"
+                          className="w-16 h-16 md:w-20 md:h-20 object-cover rounded border border-gray-200 dark:border-gray-700 shadow-sm"
+                        />
                       </div>
                     )}
                     
-                    {/* 展示图 */}
+                    {/* 展示图 - 保持原有尺寸 */}
                     {item.coverUrl && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">展示图</p>
-                        <img src={item.coverUrl} alt="cover" className="w-[30%] h-60 object-cover rounded border border-gray-200 dark:border-gray-700" />
+                        <FileDisplay
+                          fileId={item.coverUrl}
+                          type="image"
+                          alt="cover"
+                          className="w-[30%] h-60 object-cover rounded border border-gray-200 dark:border-gray-700"
+                        />
                       </div>
                     )}
                     
@@ -459,12 +883,22 @@ export const UploadCenter: React.FC = () => {
                     {activeTab === 'travel' && item.travelVideo1 ? (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">视频1</p>
-                        <video src={item.travelVideo1} controls className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain" />
+                        <FileDisplay
+                          fileId={item.travelVideo1}
+                          type="video"
+                          alt="video1"
+                          className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
+                        />
                       </div>
                     ) : item.videoUrl ? (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">视频</p>
-                        <video src={item.videoUrl} controls className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain" />
+                        <FileDisplay
+                          fileId={item.videoUrl}
+                          type="video"
+                          alt="video"
+                          className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
+                        />
                       </div>
                     ) : null}
                     
@@ -472,7 +906,12 @@ export const UploadCenter: React.FC = () => {
                     {activeTab === 'travel' && item.travelVideo2 && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">视频2</p>
-                        <video src={item.travelVideo2} controls className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain" />
+                        <FileDisplay
+                          fileId={item.travelVideo2}
+                          type="video"
+                          alt="video2"
+                          className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
+                        />
                       </div>
                     )}
                     
@@ -480,7 +919,12 @@ export const UploadCenter: React.FC = () => {
                     {activeTab === 'travel' && item.travelVideo3 && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">视频3</p>
-                        <video src={item.travelVideo3} controls className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain" />
+                        <FileDisplay
+                          fileId={item.travelVideo3}
+                          type="video"
+                          alt="video3"
+                          className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
+                        />
                       </div>
                     )}
                   </div>
