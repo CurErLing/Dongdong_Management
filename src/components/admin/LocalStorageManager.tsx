@@ -27,29 +27,23 @@ export const LocalStorageManager: React.FC<LocalStorageManagerProps> = ({
 
   // 检查浏览器支持
   useEffect(() => {
-    const checkSupport = () => {
-      const supported = 'showDirectoryPicker' in window;
-      setIsSupported(supported);
-      
-      if (supported) {
-        initLocalFileSystem().then(() => {
-          setIsInitialized(true);
-        }).catch(error => {
-          console.error('本地文件系统初始化失败:', error);
-          setError('本地文件系统初始化失败');
-        });
-      } else {
-        setError('浏览器不支持文件系统API');
-      }
-    };
+    const supported = 'showDirectoryPicker' in window;
+    setIsSupported(supported);
     
-    checkSupport();
+    if (supported) {
+      initLocalFileSystem().then(() => {
+        setIsInitialized(true);
+      }).catch(error => {
+        console.error('本地文件系统初始化失败:', error);
+        setError('本地文件系统初始化失败');
+      });
+    } else {
+      setError('浏览器不支持文件系统API');
+    }
   }, []);
 
   // 获取存储统计
   const refreshStats = async () => {
-    if (!isSupported) return;
-    
     try {
       setIsLoading(true);
       setError(null);
