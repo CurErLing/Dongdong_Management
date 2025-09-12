@@ -254,7 +254,7 @@ export const LocalStorageManager: React.FC<LocalStorageManagerProps> = ({
               <div className="flex flex-wrap gap-2">
                 {Object.entries(stats.fileTypes).map(([type, count]) => (
                   <span key={type} className="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-xs">
-                    {type}: {count}
+                    {type}: {String(count)}
                   </span>
                 ))}
               </div>
