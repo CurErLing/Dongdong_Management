@@ -6,6 +6,7 @@ export interface CardProps {
   padding?: 'none' | 'sm' | 'md' | 'lg';
   shadow?: 'none' | 'sm' | 'md' | 'lg';
   hover?: boolean;
+  onClick?: React.MouseEventHandler<HTMLDivElement>;
 }
 
 export interface CardHeaderProps {
@@ -51,6 +52,7 @@ export const Card: React.FC<CardProps> = ({
   padding = 'md',
   shadow = 'md',
   hover = false,
+  onClick,
 }) => {
   const styles = useCardStyles();
   
@@ -68,7 +70,7 @@ export const Card: React.FC<CardProps> = ({
   }, [styles, shadow, hover, className]);
 
   return (
-    <div className={cardClasses}>
+    <div className={cardClasses} onClick={onClick}>
       {children}
     </div>
   );

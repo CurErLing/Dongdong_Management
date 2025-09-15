@@ -109,7 +109,7 @@ const DashboardHeader: React.FC<{
     </div>
     <div className="flex items-center space-x-2">
       <Badge variant="success">系统正常</Badge>
-      <Badge variant="info">在线用户: {totalUsers}</Badge>
+      <Badge variant="primary">在线用户: {totalUsers}</Badge>
       <Badge variant={healthScore >= 70 ? 'success' : healthScore >= 50 ? 'warning' : 'error'}>
         健康度: {statusDescription}
       </Badge>
@@ -251,7 +251,7 @@ const SystemAlert: React.FC<{
 // 主组件
 export const EnhancedDashboard: React.FC<DashboardProps> = ({ onMenuChange }) => {
   // 使用自定义Hook获取数据
-  const { stats, refresh } = useDashboardData();
+  const { stats } = useDashboardData();
 
   // 计算系统健康度
   const healthScore = calculateHealthScore(stats);
