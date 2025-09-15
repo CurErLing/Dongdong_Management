@@ -53,7 +53,7 @@ const StatCard: React.FC<{
 });
 
 // 最近活动项组件
-const RecentActivityItem: React.FC<{ log: any }> = React.memo(({ log }) => (
+const RecentActivityItem: React.FC<{ log: { action: string; detail?: string; target?: string; ts: number } }> = React.memo(({ log }) => (
   <div className="flex items-center space-x-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200">
     <div className="p-2 bg-blue-100 dark:bg-blue-900 rounded-full">
       <Activity size={16} className="text-blue-600 dark:text-blue-400" />
@@ -119,7 +119,7 @@ const DashboardHeader: React.FC<{
 
 // 统计卡片网格组件
 const StatsGrid: React.FC<{ 
-  stats: any; 
+  stats: { totalRoles: number; totalUsers: number; totalResources: number; todayOperations: number }; 
   onQuickAction: (action: string) => void 
 }> = React.memo(({ stats, onQuickAction }) => {
   const getStatValue = (key: string): number => {
@@ -167,7 +167,7 @@ const QuickActionsGrid: React.FC<{ onQuickAction: (action: string) => void }> = 
 ));
 
 // 最近活动组件
-const RecentActivities: React.FC<{ logs: any[] }> = React.memo(({ logs }) => (
+const RecentActivities: React.FC<{ logs: { action: string; detail?: string; target?: string; ts: number }[] }> = React.memo(({ logs }) => (
   <Card>
     <CardHeader>
       <h2 className="text-lg font-semibold">最近活动</h2>
@@ -190,7 +190,7 @@ const RecentActivities: React.FC<{ logs: any[] }> = React.memo(({ logs }) => (
 ));
 
 // 系统状态组件
-const SystemStatus: React.FC<{ systemHealth: any }> = React.memo(({ systemHealth }) => (
+const SystemStatus: React.FC<{ systemHealth: { isRunning: boolean; dataSync: boolean; securityStatus: boolean } }> = React.memo(({ systemHealth }) => (
   <Card>
     <CardHeader>
       <h2 className="text-lg font-semibold">系统状态</h2>
@@ -198,7 +198,9 @@ const SystemStatus: React.FC<{ systemHealth: any }> = React.memo(({ systemHealth
     <CardContent>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {DASHBOARD_CONFIG.SYSTEM_STATUS.map((item) => {
-          const isHealthy = systemHealth[item.key];
+          const isHealthy = item.key === 'running' ? systemHealth.isRunning :
+                           item.key === 'sync' ? systemHealth.dataSync :
+                           item.key === 'security' ? systemHealth.securityStatus : false;
           return (
             <div key={item.key} className={`text-center p-4 ${item.bgColor} rounded-lg`}>
               <div className={`text-2xl font-bold ${item.textColor}`}>
@@ -222,27 +224,50 @@ const SystemAlert: React.FC<{
   onQuickAction: (action: string) => void;
   healthScore: number;
 }> = React.memo(({ totalUsers, onQuickAction, healthScore }) => {
+  // 如果系统健康且用户数量正常，不显示提示
   if (totalUsers > 0 && healthScore >= 70) return null;
 
-  const alertConfig = DASHBOARD_CONFIG.SYSTEM_ALERTS.initialization;
+  // 根据具体情况显示不同的提示
+  let alertType: 'error' | 'warning' | 'info' = 'warning';
+  let alertTitle = '系统初始化';
+  let alertMessage = '检测到系统为新安装，建议先创建用户和角色配置。';
+  let actionText = '立即配置';
+  let actionTarget = 'users';
+
+  if (totalUsers === 0) {
+    alertType = 'warning';
+    alertTitle = '需要创建用户';
+    alertMessage = '系统尚未创建任何用户，请先创建管理员用户以开始使用系统。';
+    actionText = '创建用户';
+    actionTarget = 'users';
+  } else if (healthScore < 50) {
+    alertType = 'error';
+    alertTitle = '系统配置不完整';
+    alertMessage = '系统健康度较低，建议检查用户、角色和权限配置。';
+    actionText = '检查配置';
+    actionTarget = 'settings';
+  } else if (healthScore < 70) {
+    alertType = 'warning';
+    alertTitle = '系统需要优化';
+    alertMessage = '系统运行正常但配置可以进一步完善，建议添加更多用户和角色。';
+    actionText = '优化配置';
+    actionTarget = 'roles';
+  }
   
   return (
     <Alert
-      type={healthScore < 50 ? 'error' : 'warning'}
-      title={healthScore < 50 ? '系统异常' : alertConfig.title}
+      type={alertType}
+      title={alertTitle}
       closable
     >
-      {healthScore < 50 
-        ? '系统健康度较低，建议检查配置和权限设置。'
-        : alertConfig.message
-      }
+      {alertMessage}
       <Button
         variant="primary"
         size="sm"
         className="ml-4"
-        onClick={() => onQuickAction(alertConfig.action)}
+        onClick={() => onQuickAction(actionTarget)}
       >
-        {alertConfig.actionText}
+        {actionText}
       </Button>
     </Alert>
   );

@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useDeferredValue } from 'react';
 import { Plus, Trash2, Search, ChevronDown, Pencil } from 'lucide-react';
 import type { Role, RoleResourcesStore, RoleMeta, RoleMetaStore } from '../../types';
 import { appendLog, generateChanges } from '../../utils/logger';
+import { Alert } from '../ui/Alert';
 
 const storageKey = 'admin_roles_v1';
 const roleResKey = 'admin_role_resources_v1';
@@ -49,10 +50,21 @@ function useRoleStore() {
 export const RoleManager: React.FC = () => {
   const { roles, create, update, remove } = useRoleStore();
   const [q, setQ] = useState('');
+  const qDeferred = useDeferredValue(q);
   const [form, setForm] = useState<{ id?: string; name: string; roleType: string }>({ name: '', roleType: '' });
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   // removed tab system; keep minimal state setter as no-op compatibility
   const setActiveTab = (_: 'base') => {};
+
+  // 提交/保存状态与反馈
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingBase, setIsSavingBase] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const showFeedback = (type: 'success' | 'error', message: string) => {
+    setFeedback({ type, message });
+    // 3 秒后自动关闭
+    window.setTimeout(() => setFeedback(null), 3000);
+  };
 
   const [roleResources, setRoleResources] = useState<RoleResourcesStore>(() => {
     const v = localStorage.getItem(roleResKey);
@@ -89,30 +101,38 @@ export const RoleManager: React.FC = () => {
   };
 
   const filtered = useMemo(() => {
-    const query = q.trim().toLowerCase();
+    const query = qDeferred.trim().toLowerCase();
     if (!query) return roles;
     return roles.filter(r => r.name.toLowerCase().includes(query));
-  }, [q, roles]);
+  }, [qDeferred, roles]);
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim()) return;
-    if (form.id) {
-      update(form.id, { name: form.name });
-    } else {
-      const newId = `r-${Date.now()}`;
-      create({ name: form.name, description: form.roleType || '', permissions: [] }, newId);
-      appendLog('新增角色', `角色名称: ${form.name}${form.roleType ? `, 角色类型: ${form.roleType}` : ''}`, newId, undefined, {
-        roleName: form.name,
-        roleType: form.roleType || '',
-        hasAvatar: !!addAvatarFile,
-        hasVideoBaseImage: !!addVideoBaseImageFile,
-        tags: addTagsInput.split(',').map(s => s.trim()).filter(Boolean),
-        voiceTone: addVoiceTone,
-        hasSystemPrompt: !!addPrompt.trim()
-      });
-      // 保存新增角色的基础信息到元数据
-      (async () => {
+    try {
+      setIsSubmitting(true);
+      if (form.id) {
+        update(form.id, { name: form.name });
+        showFeedback('success', '角色已保存');
+        // 退出任何可能的编辑模式
+        setIsEditingBase(false);
+        // 如当前为所选角色，刷新其基础信息显示
+        if (selectedRoleId === form.id) {
+          loadBaseForRole(form.id);
+        }
+      } else {
+        const newId = `r-${Date.now()}`;
+        create({ name: form.name, description: form.roleType || '', permissions: [] }, newId);
+        appendLog('新增角色', `角色名称: ${form.name}${form.roleType ? `, 角色类型: ${form.roleType}` : ''}`, newId, undefined, {
+          roleName: form.name,
+          roleType: form.roleType || '',
+          hasAvatar: !!addAvatarFile,
+          hasVideoBaseImage: !!addVideoBaseImageFile,
+          tags: addTagsInput.split(',').map(s => s.trim()).filter(Boolean),
+          voiceTone: addVoiceTone,
+          hasSystemPrompt: !!addPrompt.trim()
+        });
+        // 保存新增角色的基础信息到元数据（等待持久化完成以便界面立即可见）
         const meta: RoleMeta = {};
         if (addAvatarFile) meta.avatarDataUrl = await readFileAsDataURL(addAvatarFile);
         if (addVideoBaseImageFile) meta.videoBaseImageDataUrl = await readFileAsDataURL(addVideoBaseImageFile);
@@ -121,17 +141,26 @@ export const RoleManager: React.FC = () => {
         meta.voiceTone = addVoiceTone.trim();
         const metaNext = { ...roleMeta, [newId]: meta } as RoleMetaStore;
         persistMeta(metaNext);
-      })();
-      setSelectedRoleId(newId);
-      ensureRoleRes(newId);
-      setActiveTab('base');
+        setSelectedRoleId(newId);
+        ensureRoleRes(newId);
+        setActiveTab('base');
+        // 立刻加载基础信息，确保界面数据同步
+        loadBaseForRole(newId);
+        showFeedback('success', '角色已新增');
+        // 收起新增面板以便聚焦到新角色
+        setShowAddForm(false);
+      }
+    } catch (error) {
+      showFeedback('error', '保存失败，请重试');
+    } finally {
+      setIsSubmitting(false);
+      setForm({ name: '', roleType: '' });
+      setAddAvatarFile(null);
+      setAddVideoBaseImageFile(null);
+      setAddTagsInput('');
+      setAddVoiceTone('');
+      setAddPrompt('');
     }
-    setForm({ name: '', roleType: '' });
-    setAddAvatarFile(null);
-    setAddVideoBaseImageFile(null);
-    setAddTagsInput('');
-    setAddVoiceTone('');
-    setAddPrompt('');
   };
 
 
@@ -179,6 +208,18 @@ export const RoleManager: React.FC = () => {
     });
   };
 
+  // 释放临时对象URL，避免内存泄漏
+  useEffect(() => {
+    let avatarUrl: string | null = null;
+    let videoUrl: string | null = null;
+    if (avatarFile) avatarUrl = URL.createObjectURL(avatarFile);
+    if (videoBaseImageFile) videoUrl = URL.createObjectURL(videoBaseImageFile);
+    return () => {
+      if (avatarUrl) URL.revokeObjectURL(avatarUrl);
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
+    };
+  }, [avatarFile, videoBaseImageFile]);
+
   const loadBaseForRole = (rid: string) => {
     const meta = ensureRoleMeta(rid);
     setBaseTagsInput((meta.tags || []).join(','));
@@ -192,31 +233,42 @@ export const RoleManager: React.FC = () => {
 
   const saveBaseInfo = async () => {
     if (!selectedRoleId) return;
-    const meta = ensureRoleMeta(selectedRoleId);
-    const next: RoleMeta = { ...meta };
-    if (avatarFile) next.avatarDataUrl = await readFileAsDataURL(avatarFile);
-    if (videoBaseImageFile) next.videoBaseImageDataUrl = await readFileAsDataURL(videoBaseImageFile);
-    next.tags = baseTagsInput
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-    next.systemPrompt = basePrompt.trim();
-    next.voiceTone = baseVoiceTone.trim();
-    const metaNext = { ...roleMeta, [selectedRoleId]: next } as RoleMetaStore;
-    persistMeta(metaNext);
-    setAvatarFile(null);
-    setVideoBaseImageFile(null);
-    
-    const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
-    const changes = generateChanges(meta, next, ['avatarDataUrl', 'videoBaseImageDataUrl', 'tags', 'systemPrompt', 'voiceTone']);
-    appendLog('保存角色基础信息', `角色: ${roleName}`, selectedRoleId, changes, {
-      roleName,
-      hasAvatar: !!next.avatarDataUrl,
-      hasVideoBaseImage: !!next.videoBaseImageDataUrl,
-      tagsCount: next.tags?.length || 0,
-      hasSystemPrompt: !!next.systemPrompt,
-      voiceTone: next.voiceTone
-    });
+    try {
+      setIsSavingBase(true);
+      const meta = ensureRoleMeta(selectedRoleId);
+      const next: RoleMeta = { ...meta };
+      if (avatarFile) next.avatarDataUrl = await readFileAsDataURL(avatarFile);
+      if (videoBaseImageFile) next.videoBaseImageDataUrl = await readFileAsDataURL(videoBaseImageFile);
+      next.tags = baseTagsInput
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      next.systemPrompt = basePrompt.trim();
+      next.voiceTone = baseVoiceTone.trim();
+      const metaNext = { ...roleMeta, [selectedRoleId]: next } as RoleMetaStore;
+      persistMeta(metaNext);
+      setAvatarFile(null);
+      setVideoBaseImageFile(null);
+      
+      const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
+      const changes = generateChanges(meta, next, ['avatarDataUrl', 'videoBaseImageDataUrl', 'tags', 'systemPrompt', 'voiceTone']);
+      appendLog('保存角色基础信息', `角色: ${roleName}`, selectedRoleId, changes, {
+        roleName,
+        hasAvatar: !!next.avatarDataUrl,
+        hasVideoBaseImage: !!next.videoBaseImageDataUrl,
+        tagsCount: next.tags?.length || 0,
+        hasSystemPrompt: !!next.systemPrompt,
+        voiceTone: next.voiceTone
+      });
+      showFeedback('success', '基础信息已保存');
+      // 刷新视图数据并退出编辑模式
+      loadBaseForRole(selectedRoleId);
+      setIsEditingBase(false);
+    } catch (error) {
+      showFeedback('error', '保存失败，请重试');
+    } finally {
+      setIsSavingBase(false);
+    }
   };
 
 
@@ -232,6 +284,15 @@ export const RoleManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {feedback && (
+        <Alert
+          type={feedback.type === 'success' ? 'success' : 'error'}
+          title={feedback.type === 'success' ? '操作成功' : '操作失败'}
+          closable
+        >
+          {feedback.message}
+        </Alert>
+      )}
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">角色管理</h2>
       </div>
@@ -323,9 +384,9 @@ export const RoleManager: React.FC = () => {
         </div>
 
         <div className="flex items-center justify-end">
-          <button type="submit" disabled={!form.name.trim()} className={`inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium text-white ${!form.name.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+          <button type="submit" disabled={!form.name.trim() || isSubmitting} className={`inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium text-white ${!form.name.trim() || isSubmitting ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
             <Plus size={14} className="mr-1" />
-            {form.id ? '保存修改' : '新增角色'}
+            {isSubmitting ? '保存中...' : (form.id ? '保存修改' : '新增角色')}
           </button>
         </div>
         </form>
@@ -403,7 +464,7 @@ export const RoleManager: React.FC = () => {
                     <div className="text-sm text-gray-500">查看：{r.name}</div>
                     {isEditingBase && (
                       <div className="flex items-center gap-2">
-                        <button onClick={saveBaseInfo} className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-sm">保存</button>
+                        <button onClick={saveBaseInfo} disabled={isSavingBase} className={`px-3 py-1.5 rounded text-sm ${isSavingBase ? 'bg-gray-400 cursor-not-allowed text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>{isSavingBase ? '保存中...' : '保存'}</button>
                         <button onClick={() => setIsEditingBase(false)} className="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-sm">取消</button>
                       </div>
                     )}
@@ -420,11 +481,12 @@ export const RoleManager: React.FC = () => {
                           {isEditingBase ? (
                             <input type="file" accept="image/*" onChange={e => setAvatarFile(e.target.files?.[0] || null)} />
                           ) : null}
-                          {selectedRoleId && (ensureRoleMeta(selectedRoleId).avatarDataUrl || avatarFile) && (
+                          {selectedRoleId && ((roleMeta[selectedRoleId]?.avatarDataUrl) || avatarFile) && (
                             <img
-                              src={avatarFile ? URL.createObjectURL(avatarFile) : ensureRoleMeta(selectedRoleId).avatarDataUrl as string}
+                              src={avatarFile ? URL.createObjectURL(avatarFile) : roleMeta[selectedRoleId]?.avatarDataUrl as string}
                               className="h-20 w-20 object-cover rounded border border-gray-200 dark:border-gray-700"
                               alt="avatar"
+                              loading="lazy"
                             />
                           )}
                         </div>
@@ -433,11 +495,12 @@ export const RoleManager: React.FC = () => {
                           {isEditingBase ? (
                             <input type="file" accept="image/*" onChange={e => setVideoBaseImageFile(e.target.files?.[0] || null)} />
                           ) : null}
-                          {selectedRoleId && (ensureRoleMeta(selectedRoleId).videoBaseImageDataUrl || videoBaseImageFile) && (
+                          {selectedRoleId && ((roleMeta[selectedRoleId]?.videoBaseImageDataUrl) || videoBaseImageFile) && (
                             <img
-                              src={videoBaseImageFile ? URL.createObjectURL(videoBaseImageFile) : ensureRoleMeta(selectedRoleId).videoBaseImageDataUrl as string}
+                              src={videoBaseImageFile ? URL.createObjectURL(videoBaseImageFile) : roleMeta[selectedRoleId]?.videoBaseImageDataUrl as string}
                               className="h-24 object-cover rounded border border-gray-200 dark:border-gray-700"
                               alt="video-base"
+                              loading="lazy"
                             />
                           )}
                         </div>
