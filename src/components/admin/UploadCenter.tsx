@@ -1,11 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Trash2 } from 'lucide-react';
 import { logResourceAction } from '../../utils/logger';
-import { fileToBase64, preprocessFile, revokePreviewUrls } from '../../utils/fileStorage';
-import { storeRoleResourcesHybrid } from '../../utils/hybridStorage';
-import { dbManager, checkIndexedDBStatus } from '../../utils/indexedDBStorage';
-import { storeFileChunked, getFileChunked, initChunkedStorage, debugChunkedStorage, getStorageStatsChunked } from '../../utils/chunkedStorage';
-import { initSimpleStorage, getFileSimple, getSimpleStorageStats } from '../../utils/simpleStorage';
+import { revokePreviewUrls } from '../../utils/fileStorage';
+import { dbManager, checkIndexedDBStatus, storeFile as storeFileIndexed } from '../../utils/indexedDBStorage';
 import type { Role, ResourceItem, RoleResourcesStore } from '../../types';
 
 // 直接复用 RoleManager 的本地存储结构与键值
@@ -154,32 +151,11 @@ export const UploadCenter: React.FC = () => {
     setTravelVideo3(null);
   }, [selectedRoleId, activeTab]);
 
-  // 初始化存储系统
+  // 初始化存储系统（仅检查 IndexedDB 状态）
   useEffect(() => {
     const initStorage = async () => {
       try {
-        console.log('UploadCenter: 开始初始化存储系统...');
-        
-        // 初始化简化存储（优先使用）
-        await initSimpleStorage();
-        console.log('UploadCenter: 简化存储初始化完成');
-        
-        // 检查简化存储状态
-        const simpleStats = await getSimpleStorageStats();
-        console.log('UploadCenter: 简化存储统计:', simpleStats);
-        
-        // 初始化分片存储（备用）
-        try {
-          await initChunkedStorage();
-          console.log('UploadCenter: 分片存储初始化完成');
-          
-          const stats = await getStorageStatsChunked();
-          console.log('UploadCenter: 分片存储统计:', stats);
-        } catch (error) {
-          console.warn('UploadCenter: 分片存储初始化失败，将使用简化存储:', error);
-        }
-        
-        // 检查IndexedDB状态
+        console.log('UploadCenter: 检查 IndexedDB 状态...');
         const status = await checkIndexedDBStatus();
         console.log('UploadCenter: IndexedDB状态:', status);
         
@@ -213,17 +189,18 @@ export const UploadCenter: React.FC = () => {
         item.dialogue = form.dialogue?.trim();
         item.timeDetail = form.timeDetail || undefined;
         
-        // 处理视频文件
+        // 处理视频文件（直接存储原文件数据）
         if (videoFile) {
-          processedVideoFile = await preprocessFile(videoFile, 'video');
-          // 使用分片存储
-          const videoId = await storeFileChunked(processedVideoFile, {
-            fileType: 'video',
-            mimeType: processedVideoFile.type,
+          processedVideoFile = videoFile;
+          const dataBuffer = await processedVideoFile.arrayBuffer();
+          const videoId = await storeFileIndexed({
+            type: 'video',
             roleId: selectedRoleId,
             resourceType: activeTab,
-            resourceId: item.id,
-            metadata: { resourceId: item.id }
+            fileName: processedVideoFile.name,
+            fileSize: processedVideoFile.size,
+            data: dataBuffer,
+            metadata: { resourceId: item.id, mimeType: processedVideoFile.type }
           });
           item.videoUrl = videoId;
           console.log('UploadCenter: 视频文件存储成功，ID:', videoId, '文件名:', videoFile.name);
@@ -231,15 +208,16 @@ export const UploadCenter: React.FC = () => {
         
         // 处理封面文件
         if (coverFile) {
-          processedCoverFile = await preprocessFile(coverFile, 'image');
-          // 使用分片存储
-          const coverId = await storeFileChunked(processedCoverFile, {
-            fileType: 'image',
-            mimeType: processedCoverFile.type,
+          processedCoverFile = coverFile;
+          const dataBuffer = await processedCoverFile.arrayBuffer();
+          const coverId = await storeFileIndexed({
+            type: 'image',
             roleId: selectedRoleId,
             resourceType: activeTab,
-            resourceId: item.id,
-            metadata: { resourceId: item.id }
+            fileName: processedCoverFile.name,
+            fileSize: processedCoverFile.size,
+            data: dataBuffer,
+            metadata: { resourceId: item.id, mimeType: processedCoverFile.type }
           });
           item.coverUrl = coverId;
           console.log('UploadCenter: 封面文件存储成功，ID:', coverId, '文件名:', coverFile.name);
@@ -247,15 +225,16 @@ export const UploadCenter: React.FC = () => {
         
         // 处理图标文件
         if (iconFile && (activeTab === 'eat' || activeTab === 'gift')) {
-          processedIconFile = await preprocessFile(iconFile, 'image');
-          // 使用分片存储
-          const iconId = await storeFileChunked(processedIconFile, {
-            fileType: 'image',
-            mimeType: processedIconFile.type,
+          processedIconFile = iconFile;
+          const dataBuffer = await processedIconFile.arrayBuffer();
+          const iconId = await storeFileIndexed({
+            type: 'image',
             roleId: selectedRoleId,
             resourceType: activeTab,
-            resourceId: item.id,
-            metadata: { resourceId: item.id }
+            fileName: processedIconFile.name,
+            fileSize: processedIconFile.size,
+            data: dataBuffer,
+            metadata: { resourceId: item.id, mimeType: processedIconFile.type }
           });
           item.iconUrl = iconId;
           console.log('UploadCenter: 图标文件存储成功，ID:', iconId, '文件名:', iconFile.name);
@@ -264,43 +243,46 @@ export const UploadCenter: React.FC = () => {
         // 处理旅行资源的三个视频
         if (activeTab === 'travel') {
           if (travelVideo1) {
-            processedTravelVideo1 = await preprocessFile(travelVideo1, 'video');
-            // 使用分片存储
-            const video1Id = await storeFileChunked(processedTravelVideo1, {
-              fileType: 'video',
-              mimeType: processedTravelVideo1.type,
+            processedTravelVideo1 = travelVideo1;
+            const dataBuffer1 = await processedTravelVideo1.arrayBuffer();
+            const video1Id = await storeFileIndexed({
+              type: 'video',
               roleId: selectedRoleId,
               resourceType: activeTab,
-              resourceId: item.id,
-              metadata: { resourceId: item.id, videoIndex: 1 }
+              fileName: processedTravelVideo1.name,
+              fileSize: processedTravelVideo1.size,
+              data: dataBuffer1,
+              metadata: { resourceId: item.id, videoIndex: 1, mimeType: processedTravelVideo1.type }
             });
             item.travelVideo1 = video1Id;
             console.log('UploadCenter: 旅行视频1存储成功，ID:', video1Id);
           }
           if (travelVideo2) {
-            processedTravelVideo2 = await preprocessFile(travelVideo2, 'video');
-            // 使用分片存储
-            const video2Id = await storeFileChunked(processedTravelVideo2, {
-              fileType: 'video',
-              mimeType: processedTravelVideo2.type,
+            processedTravelVideo2 = travelVideo2;
+            const dataBuffer2 = await processedTravelVideo2.arrayBuffer();
+            const video2Id = await storeFileIndexed({
+              type: 'video',
               roleId: selectedRoleId,
               resourceType: activeTab,
-              resourceId: item.id,
-              metadata: { resourceId: item.id, videoIndex: 2 }
+              fileName: processedTravelVideo2.name,
+              fileSize: processedTravelVideo2.size,
+              data: dataBuffer2,
+              metadata: { resourceId: item.id, videoIndex: 2, mimeType: processedTravelVideo2.type }
             });
             item.travelVideo2 = video2Id;
             console.log('UploadCenter: 旅行视频2存储成功，ID:', video2Id);
           }
           if (travelVideo3) {
-            processedTravelVideo3 = await preprocessFile(travelVideo3, 'video');
-            // 使用分片存储
-            const video3Id = await storeFileChunked(processedTravelVideo3, {
-              fileType: 'video',
-              mimeType: processedTravelVideo3.type,
+            processedTravelVideo3 = travelVideo3;
+            const dataBuffer3 = await processedTravelVideo3.arrayBuffer();
+            const video3Id = await storeFileIndexed({
+              type: 'video',
               roleId: selectedRoleId,
               resourceType: activeTab,
-              resourceId: item.id,
-              metadata: { resourceId: item.id, videoIndex: 3 }
+              fileName: processedTravelVideo3.name,
+              fileSize: processedTravelVideo3.size,
+              data: dataBuffer3,
+              metadata: { resourceId: item.id, videoIndex: 3, mimeType: processedTravelVideo3.type }
             });
             item.travelVideo3 = video3Id;
             console.log('UploadCenter: 旅行视频3存储成功，ID:', video3Id);
@@ -311,26 +293,22 @@ export const UploadCenter: React.FC = () => {
       if (activeTab === 'standby') {
         item.standbyType = standbyType;
         if (videoFile) {
-          processedVideoFile = await preprocessFile(videoFile, 'video');
-          // 强制使用IndexedDB存储
-          const videoId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          const videoRecord = {
-            id: videoId,
+          processedVideoFile = videoFile;
+          const dataBuffer = await processedVideoFile.arrayBuffer();
+          const videoId = await storeFileIndexed({
             type: 'video',
             roleId: selectedRoleId,
             resourceType: activeTab,
-            fileName: videoFile.name,
-            fileSize: videoFile.size,
-            data: await fileToBase64(processedVideoFile),
-            metadata: { resourceId: item.id },
-            timestamp: Date.now()
-          };
-          await dbManager.set('files', videoRecord);
+            fileName: processedVideoFile.name,
+            fileSize: processedVideoFile.size,
+            data: dataBuffer,
+            metadata: { resourceId: item.id, mimeType: processedVideoFile.type }
+          });
           item.videoUrl = videoId;
         }
       }
 
-      // 使用混合存储保存角色资源
+      // 组装并保存角色资源（IndexedDB）
       const nextResources = {
         ...roleRes,
         [activeTab]: (roleRes as any)[activeTab].concat(item)
@@ -345,7 +323,6 @@ export const UploadCenter: React.FC = () => {
         travelVideo3: item.travelVideo3
       });
       
-      // 使用IndexedDB保存角色资源
       const roleResourceRecord = {
         roleId: selectedRoleId,
         resources: nextResources,
@@ -354,6 +331,19 @@ export const UploadCenter: React.FC = () => {
       };
       
       await dbManager.set('roleResources', roleResourceRecord);
+
+      // 同步内存与 localStorage（保证当前页面列表立即可见）
+      setRoleResources(prev => ({
+        ...prev,
+        [selectedRoleId]: nextResources
+      }));
+      localStorage.setItem(
+        roleResKey,
+        JSON.stringify({
+          ...roleResources,
+          [selectedRoleId]: nextResources
+        })
+      );
       
       console.log('UploadCenter: 资源保存成功，完整数据:', nextResources);
       console.log('UploadCenter: 保存的资源项:', item);
@@ -421,7 +411,7 @@ export const UploadCenter: React.FC = () => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const toggleItem = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
-  // 删除资源
+  // 删除资源（统一写回 IndexedDB）
   const deleteResource = async (resourceId: string) => {
     if (!selectedRoleId || !confirm('确定删除该资源吗？')) return;
     
@@ -430,14 +420,19 @@ export const UploadCenter: React.FC = () => {
       const arr: ResourceItem[] = (roleRes as any)[activeTab] || [];
       const nextArr = arr.filter(item => item.id !== resourceId);
       
-      // 使用混合存储保存更新后的资源
       const nextResources = {
         ...roleRes,
         [activeTab]: nextArr
       };
-      
-      await storeRoleResourcesHybrid(selectedRoleId, nextResources);
-      
+      // 写回 IndexedDB
+      const roleResourceRecord = {
+        roleId: selectedRoleId,
+        resources: nextResources,
+        timestamp: Date.now(),
+        version: '1.0'
+      };
+      await dbManager.set('roleResources', roleResourceRecord);
+
       // 更新本地状态
       setRoleResources(prev => ({
         ...prev,
@@ -460,7 +455,7 @@ export const UploadCenter: React.FC = () => {
     }
   };
 
-  // 获取文件内容用于显示
+  // 获取文件内容用于显示（仅使用 IndexedDB，返回 Blob URL）
   const getFileContent = async (fileId: string): Promise<string | null> => {
     try {
       console.log('UploadCenter: 正在获取文件内容:', fileId);
@@ -470,37 +465,7 @@ export const UploadCenter: React.FC = () => {
         return null;
       }
       
-      // 优先尝试从简化存储获取
-      console.log('UploadCenter: 尝试从简化存储获取文件...');
-      const simpleResult = await getFileSimple(fileId);
-      if (simpleResult) {
-        console.log('UploadCenter: 从简化存储获取文件成功:', simpleResult.fileName);
-        console.log('UploadCenter: 文件大小:', simpleResult.data.length);
-        console.log('UploadCenter: 文件类型:', simpleResult.mimeType);
-        return simpleResult.data;
-      }
-      
-      // 检查简化存储状态
-      try {
-        const simpleStats = await getSimpleStorageStats();
-        console.log('UploadCenter: 简化存储当前状态:', simpleStats);
-      } catch (error) {
-        console.error('UploadCenter: 获取简化存储状态失败:', error);
-      }
-      
-      // 尝试从分片存储获取
-      console.log('UploadCenter: 尝试从分片存储获取文件...');
-      const chunkedResult = await getFileChunked(fileId);
-      if (chunkedResult) {
-        console.log('UploadCenter: 从分片存储获取文件成功:', chunkedResult.metadata.fileName);
-        console.log('UploadCenter: 文件大小:', chunkedResult.data.length);
-        console.log('UploadCenter: 文件类型:', chunkedResult.metadata.mimeType);
-        return chunkedResult.data;
-      }
-      
-      console.log('UploadCenter: 分片存储中没有找到文件，尝试从IndexedDB获取...');
-      
-      // 如果分片存储没有，尝试从IndexedDB获取
+      // 直接从 IndexedDB 获取
       const status = await checkIndexedDBStatus();
       console.log('UploadCenter IndexedDB状态:', status);
       
@@ -509,7 +474,7 @@ export const UploadCenter: React.FC = () => {
         return null;
       }
       
-      // 强制使用IndexedDB获取文件
+      // 获取文件
       const fileRecord = await dbManager.get('files', fileId);
       console.log('UploadCenter: 获取到的文件记录:', fileRecord);
       
@@ -523,22 +488,23 @@ export const UploadCenter: React.FC = () => {
         return null;
       }
       
-      const data = (fileRecord as any).data;
-      console.log('UploadCenter: 文件数据长度:', typeof data === 'string' ? data.length : '非字符串');
-      console.log('UploadCenter: 文件数据类型:', typeof data);
-      
-      if (typeof data !== 'string') {
-        console.error('UploadCenter: 文件数据不是字符串类型:', typeof data);
-        return null;
+      const record: any = fileRecord as any;
+      const data = record.data as string | ArrayBuffer;
+      const mimeType = record.metadata?.mimeType || record.type === 'image' ? 'image/*' : record.type === 'video' ? 'video/*' : 'application/octet-stream';
+
+      if (data instanceof ArrayBuffer) {
+        const blob = new Blob([data], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        console.log('UploadCenter: 从IndexedDB获取文件成功（ArrayBuffer→Blob URL）');
+        return url;
       }
-      
-      if (!data.startsWith('data:')) {
-        console.error('UploadCenter: 文件数据不是有效的Base64格式');
-        return null;
+
+      // 兼容旧数据（Base64 Data URL）
+      if (typeof data === 'string') {
+        return data;
       }
-      
-      console.log('UploadCenter: 从IndexedDB获取文件成功');
-      return data;
+
+      return null;
     } catch (error) {
       console.error('UploadCenter: 获取文件内容失败:', error);
       return null;
@@ -642,12 +608,7 @@ export const UploadCenter: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">文件上传中心</h2>
-        <button
-          onClick={() => debugChunkedStorage()}
-          className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
-        >
-          调试存储
-        </button>
+        {/* 已移除分片存储调试入口 */}
       </div>
 
       {/* 角色选择 */}

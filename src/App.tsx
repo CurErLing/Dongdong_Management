@@ -10,7 +10,6 @@ import { Logs } from './components/admin/Logs';
 import { Settings } from './components/admin/Settings';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { initializeStorage, checkDataIntegrity, cleanupInvalidFiles } from './utils/indexedDBStorage';
-import { initChunkedStorage } from './utils/chunkedStorage';
 
 function App() {
   const [isDarkMode, setIsDarkMode] = useDarkMode();
@@ -174,12 +173,6 @@ function App() {
       }
     });
 
-    // 初始化分片存储
-    initChunkedStorage().then(() => {
-      console.log('分片存储系统初始化完成');
-    }).catch((error: Error) => {
-      console.error('分片存储系统初始化失败:', error);
-    });
   }, []);
 
   const toggleDarkMode = useCallback(() => setIsDarkMode(!isDarkMode), [isDarkMode, setIsDarkMode]);

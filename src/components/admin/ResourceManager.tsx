@@ -1,10 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Trash2, Search } from 'lucide-react';
 import { appendLog } from '../../utils/logger';
-import { fileToBase64, preprocessFile } from '../../utils/fileStorage';
-import { storeRoleResourcesHybrid } from '../../utils/hybridStorage';
-import { dbManager, checkIndexedDBStatus } from '../../utils/indexedDBStorage';
-import { getFileChunked, initChunkedStorage, getStorageStatsChunked } from '../../utils/chunkedStorage';
+import { dbManager, checkIndexedDBStatus, storeFile as storeFileIndexed } from '../../utils/indexedDBStorage';
 import type { Role, ResourceItem, RoleResourcesStore } from '../../types';
 
 const storageKey = 'admin_roles_v1';
@@ -72,19 +69,12 @@ export const ResourceManager: React.FC = () => {
     }
   }, [selectedRoleId]);
 
-  // 获取文件内容用于显示
+  // 获取文件内容用于显示（仅使用 IndexedDB，返回 Blob URL）
   const getFileContent = async (fileId: string): Promise<string | null> => {
     try {
       console.log('ResourceManager: 正在获取文件内容:', fileId);
       
-      // 尝试从分片存储获取
-      const chunkedResult = await getFileChunked(fileId);
-      if (chunkedResult) {
-        console.log('ResourceManager: 从分片存储获取文件成功:', chunkedResult.metadata.fileName);
-        return chunkedResult.data;
-      }
-      
-      // 如果分片存储没有，尝试从IndexedDB获取
+      // 直接从 IndexedDB 获取
       const status = await checkIndexedDBStatus();
       console.log('ResourceManager IndexedDB状态:', status);
       
@@ -93,7 +83,7 @@ export const ResourceManager: React.FC = () => {
         return null;
       }
       
-      // 强制使用IndexedDB获取文件
+      // 获取文件
       const fileRecord = await dbManager.get('files', fileId);
       console.log('ResourceManager: 获取到的文件记录:', fileRecord);
       
@@ -107,21 +97,21 @@ export const ResourceManager: React.FC = () => {
         return null;
       }
       
-      const data = (fileRecord as any).data;
-      console.log('ResourceManager: 文件数据长度:', typeof data === 'string' ? data.length : '非字符串');
-      console.log('ResourceManager: 文件数据类型:', typeof data);
-      
-      if (typeof data !== 'string') {
-        console.error('ResourceManager: 文件数据不是字符串类型:', typeof data);
-        return null;
+      const record: any = fileRecord as any;
+      const data = record.data as string | ArrayBuffer;
+      const mimeType = record.metadata?.mimeType || (record.type === 'image' ? 'image/*' : record.type === 'video' ? 'video/*' : 'application/octet-stream');
+
+      if (data instanceof ArrayBuffer) {
+        const blob = new Blob([data], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        return url;
       }
-      
-      if (!data.startsWith('data:')) {
-        console.error('ResourceManager: 文件数据不是有效的Base64格式');
-        return null;
+
+      if (typeof data === 'string') {
+        return data;
       }
-      
-      return data;
+
+      return null;
     } catch (error) {
       console.error('ResourceManager: 获取文件内容失败:', error);
       return null;
@@ -277,37 +267,97 @@ export const ResourceManager: React.FC = () => {
           updated.standbyType = editStandbyType;
         }
         
-        // 处理编辑的视频文件
+        // 处理编辑的视频文件（直接存 ArrayBuffer）
         if (editVideoFile) {
-          const processedVideoFile = await preprocessFile(editVideoFile, 'video');
-          updated.videoUrl = await fileToBase64(processedVideoFile);
+          const fileObj = editVideoFile;
+          const buf = await fileObj.arrayBuffer();
+          const fileId = await storeFileIndexed({
+            type: 'video',
+            roleId: selectedRoleId,
+            resourceType: activeTab,
+            fileName: fileObj.name,
+            fileSize: fileObj.size,
+            data: buf,
+            metadata: { resourceId: editingId, mimeType: fileObj.type }
+          });
+          updated.videoUrl = fileId;
         }
         
-        // 处理编辑的封面文件
+        // 处理编辑的封面文件（直接存 ArrayBuffer）
         if (editCoverFile) {
-          const processedCoverFile = await preprocessFile(editCoverFile, 'image');
-          updated.coverUrl = await fileToBase64(processedCoverFile);
+          const fileObj = editCoverFile;
+          const buf = await fileObj.arrayBuffer();
+          const fileId = await storeFileIndexed({
+            type: 'image',
+            roleId: selectedRoleId,
+            resourceType: activeTab,
+            fileName: fileObj.name,
+            fileSize: fileObj.size,
+            data: buf,
+            metadata: { resourceId: editingId, mimeType: fileObj.type }
+          });
+          updated.coverUrl = fileId;
         }
         
-        // 处理编辑的图标文件
+        // 处理编辑的图标文件（直接存 ArrayBuffer）
         if (editIconFile) {
-          const processedIconFile = await preprocessFile(editIconFile, 'image');
-          updated.iconUrl = await fileToBase64(processedIconFile);
+          const fileObj = editIconFile;
+          const buf = await fileObj.arrayBuffer();
+          const fileId = await storeFileIndexed({
+            type: 'image',
+            roleId: selectedRoleId,
+            resourceType: activeTab,
+            fileName: fileObj.name,
+            fileSize: fileObj.size,
+            data: buf,
+            metadata: { resourceId: editingId, mimeType: fileObj.type }
+          });
+          updated.iconUrl = fileId;
         }
         
-        // 处理编辑的旅行视频文件
+        // 处理编辑的旅行视频文件（直接存 ArrayBuffer）
         if (activeTab === 'travel') {
           if (editTravelVideo1) {
-            const processedTravelVideo1 = await preprocessFile(editTravelVideo1, 'video');
-            updated.travelVideo1 = await fileToBase64(processedTravelVideo1);
+            const f = editTravelVideo1;
+            const buf = await f.arrayBuffer();
+            const id = await storeFileIndexed({
+              type: 'video',
+              roleId: selectedRoleId,
+              resourceType: activeTab,
+              fileName: f.name,
+              fileSize: f.size,
+              data: buf,
+              metadata: { resourceId: editingId, videoIndex: 1, mimeType: f.type }
+            });
+            updated.travelVideo1 = id;
           }
           if (editTravelVideo2) {
-            const processedTravelVideo2 = await preprocessFile(editTravelVideo2, 'video');
-            updated.travelVideo2 = await fileToBase64(processedTravelVideo2);
+            const f = editTravelVideo2;
+            const buf = await f.arrayBuffer();
+            const id = await storeFileIndexed({
+              type: 'video',
+              roleId: selectedRoleId,
+              resourceType: activeTab,
+              fileName: f.name,
+              fileSize: f.size,
+              data: buf,
+              metadata: { resourceId: editingId, videoIndex: 2, mimeType: f.type }
+            });
+            updated.travelVideo2 = id;
           }
           if (editTravelVideo3) {
-            const processedTravelVideo3 = await preprocessFile(editTravelVideo3, 'video');
-            updated.travelVideo3 = await fileToBase64(processedTravelVideo3);
+            const f = editTravelVideo3;
+            const buf = await f.arrayBuffer();
+            const id = await storeFileIndexed({
+              type: 'video',
+              roleId: selectedRoleId,
+              resourceType: activeTab,
+              fileName: f.name,
+              fileSize: f.size,
+              data: buf,
+              metadata: { resourceId: editingId, videoIndex: 3, mimeType: f.type }
+            });
+            updated.travelVideo3 = id;
           }
         }
         
@@ -316,13 +366,17 @@ export const ResourceManager: React.FC = () => {
       
       const resolvedNextArr = await Promise.all(nextArr);
       
-      // 使用混合存储保存更新后的资源
       const nextResources = {
         ...r,
         [activeTab]: resolvedNextArr
       };
-      
-      await storeRoleResourcesHybrid(selectedRoleId, nextResources);
+      // 写回 IndexedDB
+      await dbManager.set('roleResources', {
+        roleId: selectedRoleId,
+        resources: nextResources,
+        timestamp: Date.now(),
+        version: '1.0'
+      });
       
       // 更新本地状态
       setRoleResources(prev => ({
@@ -352,13 +406,17 @@ export const ResourceManager: React.FC = () => {
       const arr: ResourceItem[] = (r as any)[activeTab] || [];
       const nextArr = arr.filter(it => it.id !== item.id);
       
-      // 使用混合存储保存更新后的资源
       const nextResources = {
         ...r,
         [activeTab]: nextArr
       };
-      
-      await storeRoleResourcesHybrid(selectedRoleId, nextResources);
+      // 写回 IndexedDB
+      await dbManager.set('roleResources', {
+        roleId: selectedRoleId,
+        resources: nextResources,
+        timestamp: Date.now(),
+        version: '1.0'
+      });
       
       // 更新本地状态
       setRoleResources(prev => ({
@@ -380,29 +438,13 @@ export const ResourceManager: React.FC = () => {
     }
   };
 
-  const debugChunkedStorage = async () => {
-    try {
-      await initChunkedStorage();
-      console.log('Chunked Storage initialized successfully.');
-      const stats = await getStorageStatsChunked();
-      console.log('Chunked Storage stats:', stats);
-      alert('Chunked Storage Debug: Initialized and stats listed.');
-    } catch (error) {
-      console.error('Chunked Storage Debug Error:', error);
-      alert(`Chunked Storage Debug Error: ${error instanceof Error ? error.message : '未知错误'}`);
-    }
-  };
+  // 已移除分片存储调试逻辑
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">资源管理（读取现有配置）</h2>
-        <button
-          onClick={() => debugChunkedStorage()}
-          className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
-        >
-          调试存储
-        </button>
+        {/* 已移除分片存储调试入口 */}
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -762,5 +804,3 @@ export const ResourceManager: React.FC = () => {
     </div>
   );
 };
-
-
