@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { LocalStorageManager } from './LocalStorageManager';
 import type { RoleResourcesStore } from '../../types';
+import { dbManager, checkIndexedDBStatus } from '../../utils/indexedDBStorage';
 
 export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'general' | 'data' | 'security' | 'notifications' | 'about'>('general');
@@ -41,13 +42,12 @@ export const Settings: React.FC = () => {
       const roles = JSON.parse(localStorage.getItem('admin_roles_v1') || '[]');
       const users = JSON.parse(localStorage.getItem('admin_users_v1') || '[]');
       const logs = JSON.parse(localStorage.getItem('admin_action_logs_v1') || '[]');
-      
       return {
         totalRoles: Array.isArray(roles) ? roles.length : 0,
         totalUsers: Array.isArray(users) ? users.length : 0,
         totalLogs: Array.isArray(logs) ? logs.length : 0,
-        totalResources: 0, // 暂时设为0，避免复杂计算
-        storageSize: 0 // 暂时设为0，避免复杂计算
+        totalResources: 0,
+        storageSize: 0
       };
     } catch (error) {
       console.error('Error getting stats:', error);
@@ -59,17 +59,38 @@ export const Settings: React.FC = () => {
         storageSize: 0
       };
     }
-  }, [activeTab]); // 只在切换标签时重新计算
+  }, [activeTab]);
 
   // 导出数据
-  const exportData = useCallback(() => {
+  const exportData = useCallback(async () => {
     try {
+      const roles = JSON.parse(localStorage.getItem('admin_roles_v1') || '[]');
+      const roleResourcesLS = JSON.parse(localStorage.getItem('admin_role_resources_v1') || '{}');
+      const users = JSON.parse(localStorage.getItem('admin_users_v1') || '[]');
+      const logs = JSON.parse(localStorage.getItem('admin_action_logs_v1') || '[]');
+      const roleMeta = JSON.parse(localStorage.getItem('admin_role_meta_v1') || '{}');
+
+      // 同步导出 IndexedDB 数据
+      let idbRoleResources: any[] = [];
+      let idbFiles: any[] = [];
+      try {
+        const status = await checkIndexedDBStatus();
+        if (status.isInitialized) {
+          idbRoleResources = await (dbManager as any).getAll('roleResources');
+          idbFiles = await (dbManager as any).getAll('files');
+        }
+      } catch (e) {
+        console.warn('导出时获取IndexedDB数据失败，将仅导出localStorage数据:', e);
+      }
+
       const data = {
-        roles: JSON.parse(localStorage.getItem('admin_roles_v1') || '[]'),
-        roleResources: JSON.parse(localStorage.getItem('admin_role_resources_v1') || '{}'),
-        users: JSON.parse(localStorage.getItem('admin_users_v1') || '[]'),
-        logs: JSON.parse(localStorage.getItem('admin_action_logs_v1') || '[]'),
-        roleMeta: JSON.parse(localStorage.getItem('admin_role_meta_v1') || '{}'),
+        roles,
+        roleResources: roleResourcesLS,
+        users,
+        logs,
+        roleMeta,
+        idbRoleResources,
+        idbFiles,
         exportTime: new Date().toISOString(),
         version: '1.0.0'
       };
@@ -104,6 +125,27 @@ export const Settings: React.FC = () => {
         if (data.logs) localStorage.setItem('admin_action_logs_v1', JSON.stringify(data.logs));
         if (data.roleMeta) localStorage.setItem('admin_role_meta_v1', JSON.stringify(data.roleMeta));
         
+        // 导入IndexedDB数据（若存在）
+        (async () => {
+          try {
+            const status = await checkIndexedDBStatus();
+            if (status.isInitialized) {
+              if (Array.isArray(data.idbRoleResources)) {
+                for (const rec of data.idbRoleResources) {
+                  await dbManager.set('roleResources', rec);
+                }
+              }
+              if (Array.isArray(data.idbFiles)) {
+                for (const f of data.idbFiles) {
+                  await dbManager.set('files', f);
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('导入IndexedDB数据失败，已跳过:', e);
+          }
+        })();
+
         alert('数据导入成功！页面将刷新以应用更改。');
         window.location.reload();
       } catch (error) {
@@ -128,6 +170,18 @@ export const Settings: React.FC = () => {
           localStorage.removeItem('admin_users_v1');
           localStorage.removeItem('admin_action_logs_v1');
           localStorage.removeItem('admin_role_meta_v1');
+          // 同时清空 IndexedDB
+          (async () => {
+            try {
+              const status = await checkIndexedDBStatus();
+              if (status.isInitialized) {
+                await dbManager.clear('roleResources');
+                await dbManager.clear('files');
+              }
+            } catch (e) {
+              console.warn('清理IndexedDB失败:', e);
+            }
+          })();
           break;
       }
       

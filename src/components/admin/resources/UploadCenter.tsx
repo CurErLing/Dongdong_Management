@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Trash2 } from 'lucide-react';
-import { logResourceAction } from '../../utils/logger';
-import { revokePreviewUrls } from '../../utils/fileStorage';
-import { dbManager, checkIndexedDBStatus, storeFile as storeFileIndexed } from '../../utils/indexedDBStorage';
-import type { Role, ResourceItem, RoleResourcesStore } from '../../types';
+import { logResourceAction } from '../../../utils/logger';
+import { revokePreviewUrls } from '../../../utils/fileStorage';
+import { dbManager, checkIndexedDBStatus, storeFile as storeFileIndexed } from '../../../utils/indexedDBStorage';
+import type { Role, ResourceItem, RoleResourcesStore } from '../../../types';
 
 // 直接复用 RoleManager 的本地存储结构与键值
 const storageKey = 'admin_roles_v1';
@@ -111,7 +111,6 @@ export const UploadCenter: React.FC = () => {
   useEffect(() => {
     console.log('文件上传：角色列表', roles, '当前选中角色:', selectedRoleId);
     if (roles.length > 0) {
-      // 如果当前选中的角色不存在于角色列表中，或者没有选中角色，则设置默认角色
       const currentRoleExists = roles.some(r => r.id === selectedRoleId);
       if (!currentRoleExists) {
         const saved = localStorage.getItem(selectedRoleKey);
@@ -138,7 +137,7 @@ export const UploadCenter: React.FC = () => {
     localStorage.setItem(selectedTabKey, activeTab);
   }, [activeTab]);
 
-  // Reset inputs when role/tab change to avoid误操作
+  // Reset inputs when role/tab change
   useEffect(() => {
     setForm({ name: '', dialogue: '', timeDetail: '' });
     setVideoFile(null);
@@ -158,12 +157,10 @@ export const UploadCenter: React.FC = () => {
         console.log('UploadCenter: 检查 IndexedDB 状态...');
         const status = await checkIndexedDBStatus();
         console.log('UploadCenter: IndexedDB状态:', status);
-        
       } catch (error) {
         console.error('UploadCenter: 存储系统初始化失败:', error);
       }
     };
-    
     initStorage();
   }, []);
 
@@ -177,7 +174,6 @@ export const UploadCenter: React.FC = () => {
     };
 
     try {
-      // 预处理文件
       let processedVideoFile = null;
       let processedIconFile = null;
       let processedCoverFile = null;
@@ -189,7 +185,6 @@ export const UploadCenter: React.FC = () => {
         item.dialogue = form.dialogue?.trim();
         item.timeDetail = form.timeDetail || undefined;
         
-        // 处理视频文件（直接存储原文件数据）
         if (videoFile) {
           processedVideoFile = videoFile;
           const dataBuffer = await processedVideoFile.arrayBuffer();
@@ -203,10 +198,8 @@ export const UploadCenter: React.FC = () => {
             metadata: { resourceId: item.id, mimeType: processedVideoFile.type }
           });
           item.videoUrl = videoId;
-          console.log('UploadCenter: 视频文件存储成功，ID:', videoId, '文件名:', videoFile.name);
         }
         
-        // 处理封面文件
         if (coverFile) {
           processedCoverFile = coverFile;
           const dataBuffer = await processedCoverFile.arrayBuffer();
@@ -220,10 +213,8 @@ export const UploadCenter: React.FC = () => {
             metadata: { resourceId: item.id, mimeType: processedCoverFile.type }
           });
           item.coverUrl = coverId;
-          console.log('UploadCenter: 封面文件存储成功，ID:', coverId, '文件名:', coverFile.name);
         }
         
-        // 处理图标文件
         if (iconFile && (activeTab === 'eat' || activeTab === 'gift')) {
           processedIconFile = iconFile;
           const dataBuffer = await processedIconFile.arrayBuffer();
@@ -237,10 +228,8 @@ export const UploadCenter: React.FC = () => {
             metadata: { resourceId: item.id, mimeType: processedIconFile.type }
           });
           item.iconUrl = iconId;
-          console.log('UploadCenter: 图标文件存储成功，ID:', iconId, '文件名:', iconFile.name);
         }
         
-        // 处理旅行资源的三个视频
         if (activeTab === 'travel') {
           if (travelVideo1) {
             processedTravelVideo1 = travelVideo1;
@@ -255,7 +244,6 @@ export const UploadCenter: React.FC = () => {
               metadata: { resourceId: item.id, videoIndex: 1, mimeType: processedTravelVideo1.type }
             });
             item.travelVideo1 = video1Id;
-            console.log('UploadCenter: 旅行视频1存储成功，ID:', video1Id);
           }
           if (travelVideo2) {
             processedTravelVideo2 = travelVideo2;
@@ -270,7 +258,6 @@ export const UploadCenter: React.FC = () => {
               metadata: { resourceId: item.id, videoIndex: 2, mimeType: processedTravelVideo2.type }
             });
             item.travelVideo2 = video2Id;
-            console.log('UploadCenter: 旅行视频2存储成功，ID:', video2Id);
           }
           if (travelVideo3) {
             processedTravelVideo3 = travelVideo3;
@@ -285,7 +272,6 @@ export const UploadCenter: React.FC = () => {
               metadata: { resourceId: item.id, videoIndex: 3, mimeType: processedTravelVideo3.type }
             });
             item.travelVideo3 = video3Id;
-            console.log('UploadCenter: 旅行视频3存储成功，ID:', video3Id);
           }
         }
       }
@@ -308,31 +294,18 @@ export const UploadCenter: React.FC = () => {
         }
       }
 
-      // 组装并保存角色资源（IndexedDB）
       const nextResources = {
         ...roleRes,
         [activeTab]: (roleRes as any)[activeTab].concat(item)
       };
       
-      console.log('UploadCenter: 准备保存资源，文件ID信息:', {
-        videoUrl: item.videoUrl,
-        coverUrl: item.coverUrl,
-        iconUrl: item.iconUrl,
-        travelVideo1: item.travelVideo1,
-        travelVideo2: item.travelVideo2,
-        travelVideo3: item.travelVideo3
-      });
-      
-      const roleResourceRecord = {
+      await dbManager.set('roleResources', {
         roleId: selectedRoleId,
         resources: nextResources,
         timestamp: Date.now(),
         version: '1.0'
-      };
-      
-      await dbManager.set('roleResources', roleResourceRecord);
+      });
 
-      // 同步内存与 localStorage（保证当前页面列表立即可见）
       setRoleResources(prev => ({
         ...prev,
         [selectedRoleId]: nextResources
@@ -344,9 +317,6 @@ export const UploadCenter: React.FC = () => {
           [selectedRoleId]: nextResources
         })
       );
-      
-      console.log('UploadCenter: 资源保存成功，完整数据:', nextResources);
-      console.log('UploadCenter: 保存的资源项:', item);
       
       const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
       const resourceTypeMap = { eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any;
@@ -361,19 +331,16 @@ export const UploadCenter: React.FC = () => {
         hasDialogue: !!item.dialogue,
         timeDetail: item.timeDetail,
         standbyType: item.standbyType,
-        // 旅行视频信息
         hasTravelVideo1: !!item.travelVideo1,
         hasTravelVideo2: !!item.travelVideo2,
         hasTravelVideo3: !!item.travelVideo3
       });
 
-      // 清理临时预览URL
       const tempUrls = [videoFile, iconFile, coverFile, travelVideo1, travelVideo2, travelVideo3]
         .filter(Boolean)
         .map(file => URL.createObjectURL(file!));
       revokePreviewUrls(tempUrls);
 
-      // reset
       setForm({ name: '', dialogue: '', timeDetail: '' });
       setVideoFile(null);
       setIconFile(null);
@@ -407,11 +374,9 @@ export const UploadCenter: React.FC = () => {
 
   const canSave = selectedRoleId && form.name.trim() && !(activeTab === 'standby' && !videoFile);
 
-  // 展开/折叠已添加资源
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const toggleItem = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
-  // 删除资源（统一写回 IndexedDB）
   const deleteResource = async (resourceId: string) => {
     if (!selectedRoleId || !confirm('确定删除该资源吗？')) return;
     
@@ -424,16 +389,13 @@ export const UploadCenter: React.FC = () => {
         ...roleRes,
         [activeTab]: nextArr
       };
-      // 写回 IndexedDB
-      const roleResourceRecord = {
+      await dbManager.set('roleResources', {
         roleId: selectedRoleId,
         resources: nextResources,
         timestamp: Date.now(),
         version: '1.0'
-      };
-      await dbManager.set('roleResources', roleResourceRecord);
+      });
 
-      // 更新本地状态
       setRoleResources(prev => ({
         ...prev,
         [selectedRoleId]: nextResources
@@ -455,7 +417,6 @@ export const UploadCenter: React.FC = () => {
     }
   };
 
-  // 获取文件内容用于显示（仅使用 IndexedDB，返回 Blob URL）
   const getFileContent = async (fileId: string): Promise<string | null> => {
     try {
       console.log('UploadCenter: 正在获取文件内容:', fileId);
@@ -465,7 +426,6 @@ export const UploadCenter: React.FC = () => {
         return null;
       }
       
-      // 直接从 IndexedDB 获取
       const status = await checkIndexedDBStatus();
       console.log('UploadCenter IndexedDB状态:', status);
       
@@ -474,7 +434,6 @@ export const UploadCenter: React.FC = () => {
         return null;
       }
       
-      // 获取文件
       const fileRecord = await dbManager.get('files', fileId);
       console.log('UploadCenter: 获取到的文件记录:', fileRecord);
       
@@ -499,7 +458,6 @@ export const UploadCenter: React.FC = () => {
         return url;
       }
 
-      // 兼容旧数据（Base64 Data URL）
       if (typeof data === 'string') {
         return data;
       }
@@ -511,7 +469,6 @@ export const UploadCenter: React.FC = () => {
     }
   };
 
-  // 文件显示组件
   const FileDisplay: React.FC<{ fileId: string; type: 'image' | 'video'; alt?: string; className?: string }> = ({ 
     fileId, 
     type, 
@@ -608,7 +565,6 @@ export const UploadCenter: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">文件上传中心</h2>
-        {/* 已移除分片存储调试入口 */}
       </div>
 
       {/* 角色选择 */}
@@ -667,7 +623,6 @@ export const UploadCenter: React.FC = () => {
         {['eat','gift','travel','moments'].includes(activeTab) && (
           <div className="space-y-3">
             {activeTab === 'travel' ? (
-              // 旅行资源的三个视频上传
               <div className="space-y-3">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <label className="flex items-center gap-2">
@@ -692,7 +647,6 @@ export const UploadCenter: React.FC = () => {
                 </div>
               </div>
             ) : (
-              // 其他资源的视频上传
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="flex items-center gap-2">
                   <span className="w-20 text-sm text-gray-600 dark:text-gray-300">视频上传</span>
@@ -746,8 +700,6 @@ export const UploadCenter: React.FC = () => {
             {errors.video && <div className="text-xs text-red-600 md:col-span-3">{errors.video}</div>}
           </div>
         )}
-
-
 
         <div className="flex items-center gap-3">
           <button
@@ -814,7 +766,6 @@ export const UploadCenter: React.FC = () => {
 
                 {isOpen && (item.iconUrl || item.coverUrl || item.videoUrl || item.travelVideo1 || item.travelVideo2 || item.travelVideo3) && (
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-start">
-                    {/* 图标 (非旅行资源) - 调整为小图标尺寸 */}
                     {activeTab !== 'travel' && item.iconUrl && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">图标</p>
@@ -827,7 +778,6 @@ export const UploadCenter: React.FC = () => {
                       </div>
                     )}
                     
-                    {/* 展示图 - 保持原有尺寸 */}
                     {item.coverUrl && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">展示图</p>
@@ -840,7 +790,6 @@ export const UploadCenter: React.FC = () => {
                       </div>
                     )}
                     
-                    {/* 视频1 */}
                     {activeTab === 'travel' && item.travelVideo1 ? (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">视频1</p>
@@ -863,7 +812,6 @@ export const UploadCenter: React.FC = () => {
                       </div>
                     ) : null}
                     
-                    {/* 视频2 (仅旅行资源) */}
                     {activeTab === 'travel' && item.travelVideo2 && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">视频2</p>
@@ -876,7 +824,6 @@ export const UploadCenter: React.FC = () => {
                       </div>
                     )}
                     
-                    {/* 视频3 (仅旅行资源) */}
                     {activeTab === 'travel' && item.travelVideo3 && (
                       <div>
                         <p className="text-xs mb-1 text-gray-500">视频3</p>
@@ -901,5 +848,7 @@ export const UploadCenter: React.FC = () => {
     </div>
   );
 };
+
+export default UploadCenter;
 
 

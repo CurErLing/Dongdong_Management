@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Trash2, Search } from 'lucide-react';
-import { appendLog } from '../../utils/logger';
-import { dbManager, checkIndexedDBStatus, storeFile as storeFileIndexed } from '../../utils/indexedDBStorage';
-import type { Role, ResourceItem, RoleResourcesStore } from '../../types';
+import { appendLog } from '../../../utils/logger';
+import { dbManager, checkIndexedDBStatus, storeFile as storeFileIndexed } from '../../../utils/indexedDBStorage';
+import type { Role, ResourceItem, RoleResourcesStore } from '../../../types';
 
 const storageKey = 'admin_roles_v1';
 const roleResKey = 'admin_role_resources_v1';
@@ -35,10 +35,8 @@ export const ResourceManager: React.FC = () => {
     return next[rid];
   };
 
-  // 从混合存储获取角色资源
   const fetchRoleResources = async (roleId: string) => {
     try {
-      // 检查IndexedDB状态
       const status = await checkIndexedDBStatus();
       console.log('ResourceManager IndexedDB状态:', status);
       
@@ -47,7 +45,6 @@ export const ResourceManager: React.FC = () => {
         return;
       }
 
-      // 强制使用IndexedDB获取数据
       const result = await dbManager.get('roleResources', roleId);
       console.log('ResourceManager 获取到的角色资源:', result);
       const resources = (result as any)?.resources;
@@ -62,19 +59,16 @@ export const ResourceManager: React.FC = () => {
     }
   };
 
-  // 当选择角色变化时，从混合存储获取数据
   useEffect(() => {
     if (selectedRoleId) {
       fetchRoleResources(selectedRoleId);
     }
   }, [selectedRoleId]);
 
-  // 获取文件内容用于显示（仅使用 IndexedDB，返回 Blob URL）
   const getFileContent = async (fileId: string): Promise<string | null> => {
     try {
       console.log('ResourceManager: 正在获取文件内容:', fileId);
       
-      // 直接从 IndexedDB 获取
       const status = await checkIndexedDBStatus();
       console.log('ResourceManager IndexedDB状态:', status);
       
@@ -83,7 +77,6 @@ export const ResourceManager: React.FC = () => {
         return null;
       }
       
-      // 获取文件
       const fileRecord = await dbManager.get('files', fileId);
       console.log('ResourceManager: 获取到的文件记录:', fileRecord);
       
@@ -118,7 +111,6 @@ export const ResourceManager: React.FC = () => {
     }
   };
 
-  // 文件显示组件
   const FileDisplay: React.FC<{ fileId: string; type: 'image' | 'video'; alt?: string; className?: string }> = ({ 
     fileId, 
     type, 
@@ -219,13 +211,11 @@ export const ResourceManager: React.FC = () => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const toggleItem = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
-  // 编辑状态与表单
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ name: string; note?: string; dialogue?: string; timeDetail?: string }>({ name: '', note: '', dialogue: '', timeDetail: '' });
   const [editVideoFile, setEditVideoFile] = useState<File | null>(null);
   const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
   const [editIconFile, setEditIconFile] = useState<File | null>(null);
-  // 旅行资源的三个视频编辑状态
   const [editTravelVideo1, setEditTravelVideo1] = useState<File | null>(null);
   const [editTravelVideo2, setEditTravelVideo2] = useState<File | null>(null);
   const [editTravelVideo3, setEditTravelVideo3] = useState<File | null>(null);
@@ -262,12 +252,10 @@ export const ResourceManager: React.FC = () => {
           timeDetail: editForm.timeDetail || undefined 
         };
         
-        // 处理待机类型
         if (activeTab === 'standby') {
           updated.standbyType = editStandbyType;
         }
         
-        // 处理编辑的视频文件（直接存 ArrayBuffer）
         if (editVideoFile) {
           const fileObj = editVideoFile;
           const buf = await fileObj.arrayBuffer();
@@ -283,7 +271,6 @@ export const ResourceManager: React.FC = () => {
           updated.videoUrl = fileId;
         }
         
-        // 处理编辑的封面文件（直接存 ArrayBuffer）
         if (editCoverFile) {
           const fileObj = editCoverFile;
           const buf = await fileObj.arrayBuffer();
@@ -299,7 +286,6 @@ export const ResourceManager: React.FC = () => {
           updated.coverUrl = fileId;
         }
         
-        // 处理编辑的图标文件（直接存 ArrayBuffer）
         if (editIconFile) {
           const fileObj = editIconFile;
           const buf = await fileObj.arrayBuffer();
@@ -315,7 +301,6 @@ export const ResourceManager: React.FC = () => {
           updated.iconUrl = fileId;
         }
         
-        // 处理编辑的旅行视频文件（直接存 ArrayBuffer）
         if (activeTab === 'travel') {
           if (editTravelVideo1) {
             const f = editTravelVideo1;
@@ -370,7 +355,6 @@ export const ResourceManager: React.FC = () => {
         ...r,
         [activeTab]: resolvedNextArr
       };
-      // 写回 IndexedDB
       await dbManager.set('roleResources', {
         roleId: selectedRoleId,
         resources: nextResources,
@@ -378,15 +362,14 @@ export const ResourceManager: React.FC = () => {
         version: '1.0'
       });
       
-      // 更新本地状态
       setRoleResources(prev => ({
         ...prev,
         [selectedRoleId]: nextResources
       }));
       
-      appendLog('修改资源', `${(roles.find(r => r.id === selectedRoleId)?.name) || ''} · ${(
-        { eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any
-      )[activeTab]} · ${editForm.name}`);
+      const roleName = roles.find(r => r.id === selectedRoleId)?.name || '';
+      const resourceType = ({ eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any)[activeTab];
+      appendLog('修改资源', `${roleName} · ${resourceType} · ${editForm.name}`);
       
       setEditingId(null);
       
@@ -396,7 +379,6 @@ export const ResourceManager: React.FC = () => {
     }
   };
 
-  // 删除资源
   const deleteResource = async (item: ResourceItem) => {
     if (!selectedRoleId) return;
     if (!confirm(`确定要删除资源"${item.name}"吗？此操作不可撤销！`)) return;
@@ -410,7 +392,6 @@ export const ResourceManager: React.FC = () => {
         ...r,
         [activeTab]: nextArr
       };
-      // 写回 IndexedDB
       await dbManager.set('roleResources', {
         roleId: selectedRoleId,
         resources: nextResources,
@@ -418,7 +399,6 @@ export const ResourceManager: React.FC = () => {
         version: '1.0'
       });
       
-      // 更新本地状态
       setRoleResources(prev => ({
         ...prev,
         [selectedRoleId]: nextResources
@@ -428,7 +408,6 @@ export const ResourceManager: React.FC = () => {
       const resourceType = ({ eat: '吃东西', gift: '送礼物', travel: '旅行', standby: '待机', moments: '朋友圈' } as any)[activeTab];
       appendLog('删除资源', `${roleName} · ${resourceType} · ${item.name}`);
       
-      // 如果正在编辑被删除的资源，取消编辑状态
       if (editingId === item.id) {
         setEditingId(null);
       }
@@ -438,13 +417,10 @@ export const ResourceManager: React.FC = () => {
     }
   };
 
-  // 已移除分片存储调试逻辑
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">资源管理（读取现有配置）</h2>
-        {/* 已移除分片存储调试入口 */}
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -505,7 +481,7 @@ export const ResourceManager: React.FC = () => {
             const isOpen = !!expanded[item.id];
             return (
               <div key={item.id} className="p-4 space-y-2">
-                <button onClick={() => toggleItem(item.id)} className="w-full flex items-center justify-between text-left">
+                <button onClick={() => toggleItem(item.id)} className="w-full flex items-center justify-between text左">
                   <div className="min-w-0">
                     <p className="font-medium truncate">{item.name}</p>
                     {item.note && <p className="text-sm text-gray-500 dark:text-gray-400 truncate">{item.note}</p>}
@@ -513,7 +489,7 @@ export const ResourceManager: React.FC = () => {
                       {item.timeDetail && <span>时间：{item.timeDetail}</span>}
                       {item.standbyType && <span>待机类型：{item.standbyType === 'long' ? '长待机' : item.standbyType === 'short' ? '短待机' : '摸鱼待机'}</span>}
                       {item.dialogue && (
-                        <span className="text-blue-600 dark:text-blue-400">
+                        <span className="text蓝-600 dark:text蓝-400">
                           {activeTab === 'moments' ? '文案' : '对白'}：{item.dialogue.length > 20 ? item.dialogue.substring(0, 20) + '...' : item.dialogue}
                         </span>
                       )}
@@ -554,7 +530,6 @@ export const ResourceManager: React.FC = () => {
                     <div className="mt-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 p-3">
                       {editingId === item.id ? (
                         <div className="space-y-4">
-                          {/* 基本信息编辑 */}
                           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                             <input
                               value={editForm.name}
@@ -566,20 +541,19 @@ export const ResourceManager: React.FC = () => {
                               value={editForm.note || ''}
                               onChange={e => setEditForm(s => ({ ...s, note: e.target.value }))}
                               placeholder="备注"
-                              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700"
+                              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg白 dark:bg-gray-700"
                             />
                             <input
                               type="datetime-local"
                               value={editForm.timeDetail || ''}
                               onChange={e => setEditForm(s => ({ ...s, timeDetail: e.target.value }))}
-                              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700"
+                              className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg白 dark:bg-gray-700"
                             />
-                            {/* 待机类型选择器 */}
                             {activeTab === 'standby' && (
                               <select
                                 value={editStandbyType}
                                 onChange={e => setEditStandbyType(e.target.value as 'long' | 'short' | 'moyu')}
-                                className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700"
+                                className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg白 dark:bg-gray-700"
                               >
                                 <option value="long">长待机</option>
                                 <option value="short">短待机</option>
@@ -587,207 +561,26 @@ export const ResourceManager: React.FC = () => {
                               </select>
                             )}
                           </div>
-                          
-                          {/* 对白/文案编辑 */}
                           <div>
                             <textarea
                               value={editForm.dialogue || ''}
                               onChange={e => setEditForm(s => ({ ...s, dialogue: e.target.value }))}
                               placeholder={activeTab === 'moments' ? '文案' : '对白'}
                               rows={3}
-                              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700"
+                              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 bg白 dark:bg-gray-700"
                             />
-                          </div>
-
-                          {/* 文件上传编辑 */}
-                          <div className="space-y-3">
-                            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">文件编辑</h4>
-                            
-                            {/* 图标上传 (非旅行资源) */}
-                            {['eat', 'gift'].includes(activeTab) && (
-                              <div className="flex items-center gap-3">
-                                <label className="text-sm text-gray-600 dark:text-gray-400 min-w-[60px]">图标:</label>
-                                <input 
-                                  type="file" 
-                                  accept="image/*" 
-                                  onChange={e => setEditIconFile(e.target.files?.[0] || null)} 
-                                  className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
-                                />
-                                {editIconFile && <span className="text-xs text-green-600">已选择: {editIconFile.name}</span>}
-                              </div>
-                            )}
-                            
-                            {/* 视频上传 */}
-                            {activeTab !== 'travel' && (
-                              <div className="flex items-center gap-3">
-                                <label className="text-sm text-gray-600 dark:text-gray-400 min-w-[60px]">视频:</label>
-                                <input 
-                                  type="file" 
-                                  accept="video/*" 
-                                  onChange={e => setEditVideoFile(e.target.files?.[0] || null)} 
-                                  className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
-                                />
-                                {editVideoFile && <span className="text-xs text-green-600">已选择: {editVideoFile.name}</span>}
-                              </div>
-                            )}
-                            
-                            {/* 旅行资源的三个视频 */}
-                            {activeTab === 'travel' && (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-3">
-                                  <label className="text-sm text-gray-600 dark:text-gray-400 min-w-[60px]">视频1:</label>
-                                  <input 
-                                    type="file" 
-                                    accept="video/*" 
-                                    onChange={e => setEditTravelVideo1(e.target.files?.[0] || null)} 
-                                    className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
-                                  />
-                                  {editTravelVideo1 && <span className="text-xs text-green-600">已选择: {editTravelVideo1.name}</span>}
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <label className="text-sm text-gray-600 dark:text-gray-400 min-w-[60px]">视频2:</label>
-                                  <input 
-                                    type="file" 
-                                    accept="video/*" 
-                                    onChange={e => setEditTravelVideo2(e.target.files?.[0] || null)} 
-                                    className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
-                                  />
-                                  {editTravelVideo2 && <span className="text-xs text-green-600">已选择: {editTravelVideo2.name}</span>}
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <label className="text-sm text-gray-600 dark:text-gray-400 min-w-[60px]">视频3:</label>
-                                  <input 
-                                    type="file" 
-                                    accept="video/*" 
-                                    onChange={e => setEditTravelVideo3(e.target.files?.[0] || null)} 
-                                    className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
-                                  />
-                                  {editTravelVideo3 && <span className="text-xs text-green-600">已选择: {editTravelVideo3.name}</span>}
-                                </div>
-                              </div>
-                            )}
-                            
-                            {/* 封面图片上传 */}
-                            {['eat', 'gift', 'travel', 'moments'].includes(activeTab) && (
-                              <div className="flex items-center gap-3">
-                                <label className="text-sm text-gray-600 dark:text-gray-400 min-w-[60px]">封面:</label>
-                                <input 
-                                  type="file" 
-                                  accept="image/*" 
-                                  onChange={e => setEditCoverFile(e.target.files?.[0] || null)} 
-                                  className="text-sm border border-gray-300 dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700"
-                                />
-                                {editCoverFile && <span className="text-xs text-green-600">已选择: {editCoverFile.name}</span>}
-                              </div>
-                            )}
                           </div>
                         </div>
                       ) : null}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-start">
-                      {/* 图标 (非旅行资源) - 调整为小图标尺寸 */}
                       {activeTab !== 'travel' && item.iconUrl && (
                         <div>
                           <div className="flex items-center justify-between">
                             <p className="text-xs mb-1 text-gray-500">图标</p>
-                            {editingId === item.id && (
-                              <input type="file" accept="image/*" onChange={e => setEditIconFile(e.target.files?.[0] || null)} className="text-xs" />
-                            )}
                           </div>
-                          <FileDisplay
-                            fileId={item.iconUrl}
-                            type="image"
-                            alt="icon"
-                            className="w-16 h-16 md:w-20 md:h-20 object-cover rounded border border-gray-200 dark:border-gray-700 shadow-sm"
-                          />
-                        </div>
-                      )}
-                      
-                      {/* 展示图 */}
-                      {item.coverUrl && (
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs mb-1 text-gray-500">展示图</p>
-                            {editingId === item.id && (
-                              <input type="file" accept="image/*" onChange={e => setEditCoverFile(e.target.files?.[0] || null)} className="text-xs" />
-                            )}
-                          </div>
-                          <FileDisplay
-                            fileId={item.coverUrl}
-                            type="image"
-                            alt="cover"
-                            className="w-[30%] h-60 object-cover rounded border border-gray-200 dark:border-gray-700"
-                          />
-                        </div>
-                      )}
-                      
-                      {/* 视频1 */}
-                      {activeTab === 'travel' && item.travelVideo1 ? (
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs mb-1 text-gray-500">视频1</p>
-                            {editingId === item.id && (
-                              <input type="file" accept="video/*" onChange={e => setEditTravelVideo1(e.target.files?.[0] || null)} className="text-xs" />
-                            )}
-                          </div>
-                          <FileDisplay
-                            fileId={item.travelVideo1}
-                            type="video"
-                            alt="video1"
-                            className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
-                          />
-                        </div>
-                      ) : item.videoUrl ? (
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs mb-1 text-gray-500">视频</p>
-                            {editingId === item.id && (
-                              <input type="file" accept="video/*" onChange={e => setEditVideoFile(e.target.files?.[0] || null)} className="text-xs" />
-                            )}
-                          </div>
-                          <FileDisplay
-                            fileId={item.videoUrl}
-                            type="video"
-                            alt="video"
-                            className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
-                          />
-                        </div>
-                      ) : null}
-                      
-                      {/* 视频2 (仅旅行资源) */}
-                      {activeTab === 'travel' && item.travelVideo2 && (
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs mb-1 text-gray-500">视频2</p>
-                            {editingId === item.id && (
-                              <input type="file" accept="video/*" onChange={e => setEditTravelVideo2(e.target.files?.[0] || null)} className="text-xs" />
-                            )}
-                          </div>
-                          <FileDisplay
-                            fileId={item.travelVideo2}
-                            type="video"
-                            alt="video2"
-                            className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
-                          />
-                        </div>
-                      )}
-                      
-                      {/* 视频3 (仅旅行资源) */}
-                      {activeTab === 'travel' && item.travelVideo3 && (
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs mb-1 text-gray-500">视频3</p>
-                            {editingId === item.id && (
-                              <input type="file" accept="video/*" onChange={e => setEditTravelVideo3(e.target.files?.[0] || null)} className="text-xs" />
-                            )}
-                          </div>
-                          <FileDisplay
-                            fileId={item.travelVideo3}
-                            type="video"
-                            alt="video3"
-                            className="w-[30%] h-60 rounded border border-gray-200 dark:border-gray-700 object-contain"
-                          />
+                          {/* 图片渲染 */}
                         </div>
                       )}
                     </div>
@@ -804,3 +597,7 @@ export const ResourceManager: React.FC = () => {
     </div>
   );
 };
+
+export default ResourceManager;
+
+
